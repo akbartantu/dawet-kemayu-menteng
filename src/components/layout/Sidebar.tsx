@@ -16,6 +16,7 @@ import {
   Users,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+
 const navigation = [
   { name: "Dashboard", href: "/dashboard", icon: LayoutDashboard },
   { name: "Orders", href: "/orders", icon: ShoppingCart },
@@ -26,12 +27,15 @@ const navigation = [
   { name: "Invoices", href: "/invoices", icon: FileText },
   { name: "Reminders", href: "/reminders", icon: Bell },
 ];
+
 const bottomNav = [
   { name: "Settings", href: "/settings", icon: Settings },
 ];
+
 export function Sidebar() {
   const [collapsed, setCollapsed] = useState(false);
   const location = useLocation();
+
   return (
     <aside
       className={cn(
@@ -57,6 +61,7 @@ export function Sidebar() {
           </div>
         )}
       </div>
+
       {/* Navigation */}
       <nav className="flex-1 overflow-y-auto py-4 px-2">
         <ul className="space-y-1">
@@ -77,9 +82,11 @@ export function Sidebar() {
                   {!collapsed && <span>{item.name}</span>}
                 </Link>
               </li>
+            );
           })}
         </ul>
       </nav>
+
       {/* Bottom Navigation */}
       <div className="border-t border-sidebar-border py-4 px-2">
         <ul className="space-y-1">
@@ -100,6 +107,7 @@ export function Sidebar() {
                   {!collapsed && <span>{item.name}</span>}
                 </Link>
               </li>
+            );
           })}
           <li>
             <button
@@ -111,6 +119,7 @@ export function Sidebar() {
           </li>
         </ul>
       </div>
+
       {/* Collapse Toggle */}
       <Button
         variant="ghost"
@@ -125,4 +134,5 @@ export function Sidebar() {
         )}
       </Button>
     </aside>
+  );
 }

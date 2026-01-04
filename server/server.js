@@ -126,6 +126,7 @@ const processedConfirmations = new Set();
  * Telegram sends messages to this endpoint when customers message the bot
  */
 app.post('/api/webhooks/telegram', (req, res) => {
+
   // Always respond 200 OK to Telegram immediately
   res.status(200).send('OK');
 
@@ -184,6 +185,7 @@ async function startPolling() {
     return;
   }
 
+  
   // First, remove any existing webhook (required!)
   await deleteWebhook();
   
@@ -232,6 +234,7 @@ async function startPolling() {
     } catch (error) {
     }
   }, 2000); // Poll every 2 seconds
+
 }
 
 /**
@@ -255,6 +258,8 @@ app.post('/api/messages/whatsapp-manual', async (req, res) => {
     if (!from || !text) {
       return res.status(400).json({ error: 'Missing "from" or "text" field' });
     }
+
+
     // Create conversation ID from phone number
     const conversationId = `conv_whatsapp_${from.replace(/\D/g, '')}`;
 
@@ -272,6 +277,7 @@ app.post('/api/messages/whatsapp-manual', async (req, res) => {
     };
 
     await saveMessage(messageData);
+
     res.json({
       success: true,
       messageId: messageData.id,
@@ -286,6 +292,7 @@ app.post('/api/messages/whatsapp-manual', async (req, res) => {
  * Handle incoming Telegram message from customer
  */
 async function handleTelegramMessage(message) {
+
   try {
     // Get or create conversation
     const conversation = await getOrCreateConversation(
@@ -312,6 +319,7 @@ async function handleTelegramMessage(message) {
 
     // Save to storage
     await saveMessage(messageData);
+
     // Handle bot commands
     if (message.text?.startsWith('/')) {
       handleTelegramCommand(message);
@@ -335,13 +343,16 @@ async function handleTelegramMessage(message) {
       const validation = validateOrder(parsedOrder);
 
       if (validation.valid) {
+        
         // Mark as processed IMMEDIATELY to prevent fall-through
         orderProcessed = true;
+
         // Generate order ID (MUST be done before any operations)
         const orderId = await generateOrderId();
         if (!orderId) {
           throw new Error('Failed to generate order ID');
         }
+        
         // Create order
         const orderData = {
           id: orderId,
@@ -417,6 +428,7 @@ async function handleTelegramMessage(message) {
           // Create reminders for future orders (H-4, H-3, H-1)
           // Reminder creation is based ONLY on Event Date (not payment status, order status, etc.)
           if (orderData.event_date) {
+            
             // Normalize today for comparison
             const today = new Date();
             today.setHours(0, 0, 0, 0);
@@ -475,6 +487,7 @@ async function handleTelegramMessage(message) {
         }
       } else {
         // Order format detected but incomplete
+        
         // Always send helpful incomplete order message if it looks like an order attempt
         if (parsedOrder.customer_name || parsedOrder.phone_number || parsedOrder.items.length > 0) {
           const isEnglish = detectLanguage(message.text);
@@ -494,6 +507,7 @@ async function handleTelegramMessage(message) {
         error.message.includes('Error saving to')
       )) {
         // This is a save error - order was parsed correctly but save failed
+        
         // Send error message to user
         const errorMessage = '❌ Maaf, terjadi kesalahan saat menyimpan pesanan Anda. Silakan coba lagi atau hubungi admin.';
         await sendTelegramMessage(message.chat.id, errorMessage);
@@ -551,9 +565,9 @@ async function handleTelegramMessage(message) {
         
         await sendTelegramMessage(message.chat.id, fallbackMessage);
         markFallbackSent(message.chat.id);
-        } else if (orderProcessed) {
+      } else if (orderProcessed) {
       } else {
-        }
+      }
     }
   } catch (error) {
   }
@@ -580,6 +594,8 @@ async function handleCallbackQuery(callbackQuery) {
   const { data, message, from, id: callbackId } = callbackQuery;
   const chatId = message.chat.id;
   const messageId = message.message_id;
+
+
   // Check if this callback was already processed (prevent Telegram retries)
   const callbackKey = `${callbackId}_${data}`;
   if (processedCallbacks.has(callbackKey)) {
@@ -594,8 +610,10 @@ async function handleCallbackQuery(callbackQuery) {
   try {
     // Answer callback query IMMEDIATELY to stop Telegram retry
     await answerCallbackQuery(callbackId);
+
     if (data.startsWith('confirm_order_')) {
       const orderId = data.replace('confirm_order_', '');
+      
       // Remove inline keyboard to prevent double-click
       try {
         await editMessageReplyMarkup(chatId, messageId, null);
@@ -606,6 +624,7 @@ async function handleCallbackQuery(callbackQuery) {
       return; // CRITICAL: Return early to prevent any other processing
     } else if (data.startsWith('cancel_order_')) {
       const orderId = data.replace('cancel_order_', '');
+      
       // Remove inline keyboard
       try {
         await editMessageReplyMarkup(chatId, messageId, null);
@@ -718,6 +737,7 @@ setInterval(cleanupExpiredLocks, 5 * 60 * 1000);
  * @returns {Object} Finalized order data or null if not found/already confirmed
  */
 async function finalizeOrder(orderId) {
+  
   // Acquire lock to prevent concurrent processing
   if (!acquireOrderLock(orderId)) {
     // Return existing order if available
@@ -751,6 +771,8 @@ async function finalizeOrder(orderId) {
     if (order.status === 'confirmed') {
       return order; // Return existing order
     }
+
+
     // Normalize event_date to YYYY-MM-DD format before finalizing
     const { normalizeEventDate } = await import('./date-utils.js');
     if (order.event_date) {
@@ -798,6 +820,7 @@ async function finalizeOrder(orderId) {
 
     // Create reminders if Event Date is in the future
     if (order.event_date) {
+      
       // Normalize today for comparison
       const today = new Date();
       today.setHours(0, 0, 0, 0);
@@ -842,6 +865,7 @@ async function finalizeOrder(orderId) {
 
     // Update order status in memory
     order.status = 'confirmed';
+    
     return order;
   } catch (error) {
     throw error;
@@ -857,6 +881,7 @@ async function finalizeOrder(orderId) {
  * All order finalization goes through finalizeOrder() which has locking
  */
 async function handleOrderConfirmation(chatId, orderId, messageId) {
+  
   // Prevent duplicate processing (in-memory guard - additional safety)
   const confirmationKey = `${orderId}_${messageId}`;
   if (processedConfirmations.has(confirmationKey)) {
@@ -909,6 +934,7 @@ async function handleOrderConfirmation(chatId, orderId, messageId) {
       await sendTelegramMessage(chatId, paymentNotification);
     } else {
     }
+    
     return; // CRITICAL: Return early to prevent any other processing
   } catch (error) {
     await sendTelegramMessage(chatId, '❌ Terjadi kesalahan saat mengkonfirmasi pesanan. Silakan coba lagi.');
@@ -921,6 +947,7 @@ async function handleOrderConfirmation(chatId, orderId, messageId) {
  */
 async function handleOrderCancellation(chatId, orderId, messageId) {
   try {
+
     // Update order status to "cancelled"
     await updateOrderStatus(orderId, 'cancelled');
 
@@ -970,6 +997,7 @@ async function editMessageText(chatId, messageId, text) {
       
       // If markdown parsing error, retry without parse_mode
       if (error.error_code === 400 && error.description && error.description.includes("can't parse entities")) {
+        
         payload = {
           chat_id: chatId,
           message_id: messageId,
@@ -989,6 +1017,7 @@ async function editMessageText(chatId, messageId, text) {
         }
         return;
       }
+      
     }
   } catch (error) {
   }
@@ -1275,6 +1304,8 @@ app.post('/api/messages/send', async (req, res) => {
     if (!chatId || !text) {
       return res.status(400).json({ error: 'Missing "chatId" or "text" field' });
     }
+
+
     // Send message via Telegram Bot API
     const result = await sendTelegramMessage(chatId, text);
 
@@ -1297,6 +1328,7 @@ app.post('/api/messages/send', async (req, res) => {
     };
 
     await saveMessage(messageData);
+
     res.json({
       success: true,
       messageId: result.message_id,
@@ -1491,10 +1523,12 @@ async function sendTelegramMessage(chatId, text, replyMarkup = null) {
       
       throw new Error(`Telegram API error: ${data.description}`);
     }
+
     return data.result;
   } catch (error) {
     // If it's a markdown parsing error, try one more time as plain text
     if (error.message && error.message.includes("can't parse entities")) {
+      
       payload = {
         chat_id: chatId,
         text: text,
@@ -1681,6 +1715,8 @@ app.get('/api/orders/:id', async (req, res) => {
       payment_status: paymentStatus,
       remaining_balance: remainingBalance,
     };
+    
+    
     res.json({ order: orderWithPricing });
   } catch (error) {
     res.status(500).json({ error: 'Failed to get order', details: error.message });
@@ -1847,6 +1883,7 @@ async function findDeliveringOrdersForCustomer(conversationId) {
  */
 async function handleCustomerOrderCompletion(chatId, customerTelegramId, messageText) {
   try {
+
     // Get conversation to find customer's orders
     const conversation = await getOrCreateConversation(
       chatId,
@@ -1861,6 +1898,7 @@ async function handleCustomerOrderCompletion(chatId, customerTelegramId, message
 
     if (explicitOrderId) {
       // Case A: Explicit order ID provided
+      
       // Get the specific order
       const allOrders = await getAllOrders(1000);
       let order = allOrders.find(o => o.id === explicitOrderId);
@@ -1961,6 +1999,7 @@ async function handleCustomerOrderCompletion(chatId, customerTelegramId, message
       `Pesanan telah ditandai sebagai selesai.\n\n` +
       `Terima kasih atas kepercayaan Anda! 🙏`
     );
+
   } catch (error) {
     await sendTelegramMessage(
       chatId,
@@ -2096,6 +2135,7 @@ app.get('*', (req, res) => {
 
 // Start server
 app.listen(PORT, async () => {
+  
   try {
     // Initialize Google Sheets
     await initializeStorage();
@@ -2140,7 +2180,7 @@ function startReminderScheduler() {
     checkAndSendRemindersForToday(sendTelegramMessage);
   }, 6 * 60 * 60 * 1000); // 6 hours
   
-  }
+}
 
 /**
  * Check waiting list for orders due today and send reminders
@@ -2174,6 +2214,7 @@ async function checkAndSendReminders() {
       
       // TODO: Send to admin/owner (for now, just log)
       // In future, can send to admin Telegram chat or email
+      
       // Mark reminder as sent
       await markReminderSent(order.id);
       
@@ -2197,7 +2238,7 @@ function startWaitingListChecker() {
     checkAndSendReminders();
   }, 60 * 60 * 1000); // 1 hour
   
-  }
+}
 
 // Cleanup on exit
 process.on('SIGINT', () => {

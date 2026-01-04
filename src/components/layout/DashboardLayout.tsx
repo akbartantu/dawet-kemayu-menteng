@@ -3,15 +3,18 @@ import { Sidebar } from "./Sidebar";
 import { Bell, Search } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+
 interface DashboardLayoutProps {
   children: ReactNode;
   title?: string;
   subtitle?: string;
 }
+
 export function DashboardLayout({ children, title, subtitle }: DashboardLayoutProps) {
   return (
     <div className="min-h-screen bg-background">
       <Sidebar />
+      
       {/* Main Content */}
       <div className="pl-64 transition-all duration-300">
         {/* Header */}
@@ -24,6 +27,7 @@ export function DashboardLayout({ children, title, subtitle }: DashboardLayoutPr
               <p className="text-sm text-muted-foreground">{subtitle}</p>
             )}
           </div>
+          
           <div className="flex items-center gap-4">
             {/* Search */}
             <div className="relative">
@@ -33,6 +37,7 @@ export function DashboardLayout({ children, title, subtitle }: DashboardLayoutPr
                 className="w-64 pl-9 bg-secondary border-0"
               />
             </div>
+            
             {/* Notifications */}
             <Button variant="ghost" size="icon" className="relative">
               <Bell className="h-5 w-5" />
@@ -40,16 +45,19 @@ export function DashboardLayout({ children, title, subtitle }: DashboardLayoutPr
                 3
               </span>
             </Button>
+            
             {/* User Avatar */}
             <div className="h-9 w-9 rounded-full bg-accent flex items-center justify-center">
               <span className="text-sm font-medium text-accent-foreground">JD</span>
             </div>
           </div>
         </header>
+        
         {/* Page Content */}
         <main className="p-6">
           {children}
         </main>
       </div>
     </div>
+  );
 }

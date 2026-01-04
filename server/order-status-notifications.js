@@ -2,7 +2,9 @@
  * Order Status Notifications & Validation
  * Handles status transitions, validation, and customer notifications
  */
+
 import { getConversationById } from './google-sheets.js';
+
 /**
  * Valid status transitions (for system/customer actions)
  * Maps each status to allowed next statuses
@@ -18,6 +20,7 @@ const STATUS_TRANSITIONS = {
   'cancelled': [], // Terminal state - no transitions allowed
   'waiting': ['pending_confirmation', 'cancelled'], // Waiting list orders
 };
+
 /**
  * Status transitions allowed for merchant actions only
  * Note: 'completed' should be set by customer, not merchant
@@ -33,6 +36,7 @@ const MERCHANT_STATUS_TRANSITIONS = {
   'cancelled': [], // Terminal state
   'waiting': ['pending_confirmation', 'cancelled'],
 };
+
 /**
  * Status display names in Indonesian
  */
@@ -47,6 +51,7 @@ const STATUS_DISPLAY_NAMES = {
   'cancelled': 'Dibatalkan',
   'waiting': 'Menunggu',
 };
+
 /**
  * Validate status transition
  * @param {string} currentStatus - Current order status
@@ -59,8 +64,10 @@ export function validateStatusTransition(currentStatus, newStatus, isMerchantAct
   if (currentStatus === newStatus) {
     return { valid: true };
   }
+
   // Use merchant transitions if this is a merchant action
   const transitions = isMerchantAction ? MERCHANT_STATUS_TRANSITIONS : STATUS_TRANSITIONS;
+
   // Check if current status exists
   if (!transitions[currentStatus]) {
     return { 
@@ -68,6 +75,7 @@ export function validateStatusTransition(currentStatus, newStatus, isMerchantAct
       error: `Invalid current status: ${currentStatus}` 
     };
   }
+
   // Check if transition is allowed
   const allowedTransitions = transitions[currentStatus];
   if (!allowedTransitions.includes(newStatus)) {
@@ -80,8 +88,10 @@ export function validateStatusTransition(currentStatus, newStatus, isMerchantAct
       error: `Cannot transition from "${currentStatus}" to "${newStatus}" (${actor} action). Allowed transitions: ${allowedStatuses}` 
     };
   }
+
   return { valid: true };
 }
+
 /**
  * Get status notification message in Indonesian
  * @param {string} status - Order status
@@ -92,6 +102,7 @@ export function getStatusNotificationMessage(status, order) {
   const statusName = STATUS_DISPLAY_NAMES[status] || status;
   const orderId = order.id || 'N/A';
   const customerName = order.customer_name || 'Pelanggan';
+
   switch (status) {
     case 'processing':
       return `🔄 **Status Pesanan Diperbarui**\n\n` +
@@ -99,12 +110,14 @@ export function getStatusNotificationMessage(status, order) {
         `👤 Pelanggan: ${customerName}\n\n` +
         `✅ Pesanan Anda sedang diproses.\n` +
         `Kami akan menginformasikan Anda saat pesanan siap dikirim.`;
+    
     case 'ready':
       return `✅ **Pesanan Siap Dikirim!**\n\n` +
         `📋 Order ID: ${orderId}\n` +
         `👤 Pelanggan: ${customerName}\n\n` +
         `🎉 Pesanan Anda sudah siap dan akan segera dikirim.\n` +
         `Mohon pastikan Anda siap menerima pesanan.`;
+    
     case 'delivering':
       return `🚚 **Pesanan Sedang Dikirim!**\n\n` +
         `📋 Order ID: ${orderId}\n` +
@@ -114,6 +127,7 @@ export function getStatusNotificationMessage(status, order) {
         `✅ **Setelah menerima pesanan, balas dengan:**\n` +
         `"received" atau "selesai" atau "done"\n` +
         `untuk menandai pesanan sebagai selesai.`;
+    
     case 'completed':
       return `🎉 **Pesanan Selesai!**\n\n` +
         `📋 Order ID: ${orderId}\n` +
@@ -121,12 +135,14 @@ export function getStatusNotificationMessage(status, order) {
         `✅ Pesanan Anda telah diterima dan selesai.\n` +
         `Terima kasih atas kepercayaan Anda! 🙏\n\n` +
         `💬 Jika ada pertanyaan atau keluhan, silakan hubungi kami.`;
+    
     case 'cancelled':
       return `❌ **Pesanan Dibatalkan**\n\n` +
         `📋 Order ID: ${orderId}\n` +
         `👤 Pelanggan: ${customerName}\n\n` +
         `Pesanan Anda telah dibatalkan.\n` +
         `Jika Anda memiliki pertanyaan, silakan hubungi kami.`;
+    
     default:
       return `📋 **Status Pesanan Diperbarui**\n\n` +
         `📋 Order ID: ${orderId}\n` +
@@ -134,6 +150,7 @@ export function getStatusNotificationMessage(status, order) {
         `Status: ${statusName}`;
   }
 }
+
 /**
  * Get Telegram chat ID from order
  * @param {Object} order - Order object with conversation_id
@@ -144,19 +161,24 @@ export async function getTelegramChatIdFromOrder(order) {
     if (!order.conversation_id) {
       return null;
     }
+
     const conversation = await getConversationById(order.conversation_id);
+    
     if (!conversation) {
       return null;
     }
+
     // Check if it's a Telegram conversation
     if (conversation.platform_reference !== 'telegram') {
       return null;
     }
+
     // Parse Telegram chat ID from external_user_id
     const chatId = parseInt(conversation.external_user_id);
     if (isNaN(chatId)) {
       return null;
     }
+
     return chatId;
   } catch (error) {
     return null;

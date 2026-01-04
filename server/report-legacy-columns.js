@@ -7,8 +7,11 @@
  * 
  * If sheetName is not provided, reports for all sheets (Orders, WaitingList, Reminders)
  */
+
 import { reportLegacyTitleCaseColumns } from './google-sheets.js';
+
 const sheetName = process.argv[2] || null;
+
 if (sheetName) {
   reportLegacyTitleCaseColumns(sheetName)
     .then(() => {

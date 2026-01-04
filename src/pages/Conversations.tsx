@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect, useRef } from "react";
 import { DashboardLayout } from "@/components/layout/DashboardLayout";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -18,23 +18,34 @@ import {
   CheckCheck,
   Loader2,
   AlertCircle,
+  MessageSquare,
 } from "lucide-react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
+import { useToast } from "@/hooks/use-toast";
+
 export default function Conversations() {
   const [selectedConversationId, setSelectedConversationId] = useState<string | null>(null);
   const [messageInput, setMessageInput] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
+  const [inputKey, setInputKey] = useState(0); // Key to force input remount when message sent
+  const { toast } = useToast();
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+
   // Fetch conversations from API
   const { data: conversations = [], isLoading: conversationsLoading, error: conversationsError } = useConversations();
+  
   // Fetch messages for selected conversation
   const { data: messages = [], isLoading: messagesLoading } = useConversationMessages(selectedConversationId);
+  
   // Send message mutation
   const sendMessageMutation = useSendMessage();
+
   // Get selected conversation details
   const selectedConversation = useMemo(() => {
     if (!selectedConversationId) return null;
     return conversations.find(c => c.id === selectedConversationId);
   }, [conversations, selectedConversationId]);
+
   // Filter conversations by search
   const filteredConversations = useMemo(() => {
     if (!searchQuery) return conversations;
@@ -42,13 +53,38 @@ export default function Conversations() {
     return conversations.filter((conv) =>
       (conv.customer_name || '').toLowerCase().includes(query) ||
       (conv.customer_id || '').toLowerCase().includes(query)
+    );
   }, [conversations, searchQuery]);
+
   // Auto-select first conversation if none selected
   useMemo(() => {
     if (!selectedConversationId && conversations.length > 0) {
       setSelectedConversationId(conversations[0].id);
     }
   }, [conversations, selectedConversationId]);
+
+  // Clear input when message is successfully sent (backup to ensure it clears)
+  useEffect(() => {
+    if (sendMessageMutation.isSuccess) {
+      // Force clear input when mutation succeeds
+      setMessageInput("");
+      // Force input remount by changing key
+      setInputKey(prev => prev + 1);
+      // Reset mutation state after clearing to allow detecting next success
+      const timer = setTimeout(() => {
+        sendMessageMutation.reset();
+      }, 100);
+      return () => clearTimeout(timer);
+    }
+  }, [sendMessageMutation.isSuccess]);
+
+  // Auto-scroll to bottom when messages change (chat UX: newest at bottom)
+  useEffect(() => {
+    if (messagesEndRef.current) {
+      messagesEndRef.current.scrollIntoView({ behavior: 'smooth' });
+    }
+  }, [messages]);
+
   // Format time ago
   const formatTimeAgo = (dateString: string | null) => {
     if (!dateString) return 'Just now';
@@ -58,24 +94,56 @@ export default function Conversations() {
       return 'Just now';
     }
   };
+
   // Handle send message
   const handleSendMessage = async () => {
     if (!messageInput.trim() || !selectedConversation) return;
-    const chatId = selectedConversation.telegram_chat_id;
+
+    // Get chat ID - try telegram_chat_id first, then external_user_id
+    const chatId = selectedConversation.telegram_chat_id || 
+                   (selectedConversation.external_user_id && selectedConversation.platform_reference === 'telegram' 
+                     ? parseInt(selectedConversation.external_user_id) 
+                     : null);
+
     if (!chatId) {
-      alert('No chat ID found for this conversation');
+      toast({
+        title: "Cannot send message",
+        description: "This conversation doesn't have a Telegram chat ID. Only Telegram conversations can receive messages.",
+        variant: "destructive",
+      });
       return;
     }
+
+    const messageText = messageInput.trim();
+
     try {
+      // Clear input immediately for better UX (optimistic clear)
+      setMessageInput("");
+      
       await sendMessageMutation.mutateAsync({
         chatId: chatId,
-        text: messageInput.trim(),
+        text: messageText,
       });
-      setMessageInput("");
-    } catch (error) {
-      alert('Failed to send message. Please try again.');
+      
+      toast({
+        title: "Message sent",
+        description: "Your message has been delivered to the customer.",
+      });
+    } catch (error: any) {
+      console.error('Error sending message:', error);
+      
+      // Restore message in input on error so user can retry
+      setMessageInput(messageText);
+      
+      const errorMessage = error?.message || 'Failed to send message. Please try again.';
+      toast({
+        title: "Failed to send message",
+        description: errorMessage,
+        variant: "destructive",
+      });
     }
   };
+
   return (
     <DashboardLayout
       title="Conversations"
@@ -95,6 +163,7 @@ export default function Conversations() {
               />
             </div>
           </div>
+
           <div className="flex-1 overflow-y-auto">
             {conversationsLoading ? (
               <div className="flex items-center justify-center p-8">
@@ -120,8 +189,11 @@ export default function Conversations() {
                   .join('')
                   .toUpperCase()
                   .slice(0, 2);
+
                 const isSelected = selectedConversationId === conversation.id;
-                const isTelegram = conversation.telegram_chat_id;
+                const isTelegram = conversation.telegram_chat_id || 
+                                  (conversation.platform_reference === 'telegram' && conversation.external_user_id);
+
                 return (
                   <div
                     key={conversation.id}
@@ -166,10 +238,12 @@ export default function Conversations() {
                       </span>
                     )}
                   </div>
+                );
               })
             )}
           </div>
         </div>
+
         {/* Chat Area */}
         <div className="flex-1 flex flex-col">
           {!selectedConversation ? (
@@ -201,19 +275,30 @@ export default function Conversations() {
                     <p className="text-sm text-muted-foreground">
                       {selectedConversation.telegram_chat_id 
                         ? `Telegram: ${selectedConversation.telegram_chat_id}`
-                        : selectedConversation.customer_id || 'No contact info'}
+                        : selectedConversation.external_user_id
+                        ? `${selectedConversation.platform_reference === 'telegram' ? 'Telegram' : 'WhatsApp'}: ${selectedConversation.external_user_id}`
+                        : 'No contact info'}
                     </p>
                   </div>
                 </div>
                 <div className="flex items-center gap-2">
-                  <Badge variant={selectedConversation.telegram_chat_id ? "info" : "warning"}>
-                    {selectedConversation.telegram_chat_id ? "Telegram" : "WhatsApp"}
+                  <Badge variant={
+                    selectedConversation.telegram_chat_id || 
+                    (selectedConversation.platform_reference === 'telegram' && selectedConversation.external_user_id)
+                      ? "info" 
+                      : "warning"
+                  }>
+                    {selectedConversation.telegram_chat_id || 
+                     (selectedConversation.platform_reference === 'telegram' && selectedConversation.external_user_id)
+                      ? "Telegram" 
+                      : "WhatsApp"}
                   </Badge>
                   <Button variant="ghost" size="icon">
                     <MoreVertical className="h-4 w-4" />
                   </Button>
                 </div>
               </div>
+
               {/* Messages */}
               <div className="flex-1 overflow-y-auto p-4 space-y-4 bg-[#e5ddd5]">
                 {messagesLoading ? (
@@ -226,22 +311,39 @@ export default function Conversations() {
                     <p className="text-sm mt-2">Start the conversation!</p>
                   </div>
                 ) : (
-                  messages.map((message: any) => {
-                    const isInbound = message.direction === 'inbound';
-                    const time = message.created_at 
-                      ? new Date(message.created_at).toLocaleTimeString('en-US', { 
-                          hour: '2-digit', 
-                          minute: '2-digit' 
-                        })
-                      : 'Just now';
-                    return (
-                      <div
-                        key={message.id}
-                        className={cn(
-                          "flex",
-                          isInbound ? "justify-start" : "justify-end"
-                        )}
-                      >
+                  (() => {
+                    // Deduplicate messages by creating a unique key per message
+                    // Use platform + message_id + created_at for uniqueness
+                    const seenMessages = new Set<string>();
+                    const uniqueMessages = messages.filter((message: any) => {
+                      const uniqueKey = `${message.platform || 'unknown'}_${message.id}_${message.created_at || Date.now()}`;
+                      if (seenMessages.has(uniqueKey)) {
+                        return false; // Duplicate, skip
+                      }
+                      seenMessages.add(uniqueKey);
+                      return true;
+                    });
+
+                    return uniqueMessages.map((message: any) => {
+                      const isInbound = message.direction === 'inbound';
+                      const time = message.created_at 
+                        ? new Date(message.created_at).toLocaleTimeString('en-US', { 
+                            hour: '2-digit', 
+                            minute: '2-digit' 
+                          })
+                        : 'Just now';
+
+                      // Create unique React key: platform_messageId_createdAt
+                      const uniqueKey = `${message.platform || 'unknown'}_${message.id}_${message.created_at || Date.now()}`;
+
+                      return (
+                        <div
+                          key={uniqueKey}
+                          className={cn(
+                            "flex",
+                            isInbound ? "justify-start" : "justify-end"
+                          )}
+                        >
                         <div
                           className={cn(
                             "max-w-[70%] rounded-lg px-4 py-2 shadow",
@@ -270,9 +372,14 @@ export default function Conversations() {
                           </div>
                         </div>
                       </div>
-                  })
+                    );
+                  });
+                  })()
                 )}
+                {/* Scroll anchor for auto-scroll to bottom */}
+                <div ref={messagesEndRef} />
               </div>
+
               {/* Message Input */}
               <div className="p-4 border-t border-border bg-card">
                 <div className="flex items-center gap-3">
@@ -280,6 +387,7 @@ export default function Conversations() {
                     <Paperclip className="h-5 w-5" />
                   </Button>
                   <Input
+                    key={inputKey}
                     placeholder="Type a message..."
                     className="flex-1"
                     value={messageInput}
@@ -289,13 +397,24 @@ export default function Conversations() {
                         handleSendMessage();
                       }
                     }}
-                    disabled={sendMessageMutation.isPending || !selectedConversation?.telegram_chat_id}
+                    disabled={
+                      sendMessageMutation.isPending || 
+                      !selectedConversation ||
+                      (!selectedConversation.telegram_chat_id && 
+                       !(selectedConversation.platform_reference === 'telegram' && selectedConversation.external_user_id))
+                    }
                   />
                   <Button 
                     variant="whatsapp" 
                     size="icon"
                     onClick={handleSendMessage}
-                    disabled={sendMessageMutation.isPending || !messageInput.trim() || !selectedConversation?.telegram_chat_id}
+                    disabled={
+                      sendMessageMutation.isPending || 
+                      !messageInput.trim() || 
+                      !selectedConversation ||
+                      (!selectedConversation.telegram_chat_id && 
+                       !(selectedConversation.platform_reference === 'telegram' && selectedConversation.external_user_id))
+                    }
                   >
                     {sendMessageMutation.isPending ? (
                       <Loader2 className="h-5 w-5 animate-spin" />
@@ -310,4 +429,5 @@ export default function Conversations() {
         </div>
       </div>
     </DashboardLayout>
+  );
 }

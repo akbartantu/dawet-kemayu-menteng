@@ -7,6 +7,7 @@ import {
   Tooltip,
   ResponsiveContainer,
 } from "recharts";
+
 const data = [
   { name: "Mon", sales: 2400000, orders: 45 },
   { name: "Tue", sales: 1398000, orders: 32 },
@@ -16,6 +17,7 @@ const data = [
   { name: "Sat", sales: 5390000, orders: 102 },
   { name: "Sun", sales: 4490000, orders: 85 },
 ];
+
 export function SalesChart() {
   return (
     <div className="rounded-xl border border-border bg-card p-6">
@@ -23,6 +25,7 @@ export function SalesChart() {
         <h3 className="font-semibold text-foreground">Weekly Sales</h3>
         <p className="text-sm text-muted-foreground">Revenue performance this week</p>
       </div>
+      
       <div className="h-[300px]">
         <ResponsiveContainer width="100%" height="100%">
           <AreaChart data={data}>
@@ -68,4 +71,5 @@ export function SalesChart() {
         </ResponsiveContainer>
       </div>
     </div>
+  );
 }

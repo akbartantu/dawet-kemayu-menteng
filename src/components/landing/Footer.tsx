@@ -1,5 +1,6 @@
 import { MessageSquare } from "lucide-react";
 import { Link } from "react-router-dom";
+
 const footerLinks = {
   Product: [
     { name: "Features", href: "#" },
@@ -25,6 +26,7 @@ const footerLinks = {
     { name: "Cookie Policy", href: "#" },
   ],
 };
+
 export function Footer() {
   return (
     <footer className="bg-primary text-primary-foreground">
@@ -45,6 +47,7 @@ export function Footer() {
               through WhatsApp.
             </p>
           </div>
+
           {/* Links */}
           {Object.entries(footerLinks).map(([category, links]) => (
             <div key={category}>
@@ -64,6 +67,7 @@ export function Footer() {
             </div>
           ))}
         </div>
+
         <div className="border-t border-primary-foreground/10 mt-12 pt-8 flex flex-col md:flex-row justify-between items-center gap-4">
           <p className="text-sm text-primary-foreground/50">
             © 2025 WAConnect. All rights reserved.
@@ -91,4 +95,5 @@ export function Footer() {
         </div>
       </div>
     </footer>
+  );
 }

@@ -1,6 +1,7 @@
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { MessageSquare, Bot, User } from "lucide-react";
+
 const conversations = [
   {
     id: 1,
@@ -35,6 +36,7 @@ const conversations = [
     isBot: true,
   },
 ];
+
 export function ConversationsList() {
   return (
     <div className="rounded-xl border border-border bg-card">
@@ -48,6 +50,7 @@ export function ConversationsList() {
           Open Inbox
         </Button>
       </div>
+      
       <div className="divide-y divide-border">
         {conversations.map((conversation) => (
           <div
@@ -85,6 +88,7 @@ export function ConversationsList() {
                 </p>
               </div>
             </div>
+            
             <div className="flex items-center gap-3">
               <span className="text-xs text-muted-foreground">{conversation.time}</span>
               {conversation.unread > 0 && (
@@ -97,4 +101,5 @@ export function ConversationsList() {
         ))}
       </div>
     </div>
+  );
 }

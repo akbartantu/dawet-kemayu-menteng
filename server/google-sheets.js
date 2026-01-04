@@ -214,7 +214,6 @@ export async function getSheetHeaderMap(sheetName, options = {}) {
     
     // Log legacy columns if found
     if (legacyColumns.length > 0) {
-        legacyColumns.map(c => `${c.letter}: "${c.name}"`).join(', '));
     }
     
     // Map internal keys to column indices using aliases
@@ -1157,14 +1156,6 @@ export async function saveOrder(orderData, options = {}) {
       // Don't throw - the upsert should have prevented this
     }
     
-      orderId,
-      productTotal: totals.productTotal,
-      packagingFee: totals.packagingFee,
-      deliveryFee: totals.deliveryFee,
-      finalTotal: totals.finalTotal,
-      paymentStatus: totals.paymentStatus,
-      operation: existingRowIndex ? 'UPDATED' : 'APPENDED',
-    });
     
     // Return order data with calculated totals
     return {

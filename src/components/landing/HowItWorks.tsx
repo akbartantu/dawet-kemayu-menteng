@@ -1,4 +1,5 @@
 import { MessageSquare, Settings, Zap, TrendingUp } from "lucide-react";
+
 const steps = [
   {
     icon: Settings,
@@ -29,6 +30,7 @@ const steps = [
       "Track performance, run campaigns, and use insights to scale your operations.",
   },
 ];
+
 export function HowItWorks() {
   return (
     <section className="py-24 bg-secondary">
@@ -42,6 +44,7 @@ export function HowItWorks() {
             WhatsApp.
           </p>
         </div>
+
         <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-8">
           {steps.map((item, index) => (
             <div key={index} className="relative">
@@ -49,6 +52,7 @@ export function HowItWorks() {
               {index < steps.length - 1 && (
                 <div className="hidden lg:block absolute top-12 left-1/2 w-full h-0.5 bg-gradient-to-r from-accent to-accent/20" />
               )}
+
               <div className="relative text-center">
                 {/* Step Number */}
                 <div className="relative inline-flex mb-6">
@@ -59,6 +63,7 @@ export function HowItWorks() {
                     {item.step}
                   </span>
                 </div>
+
                 <h3 className="text-xl font-semibold text-foreground mb-3">
                   {item.title}
                 </h3>
@@ -69,4 +74,5 @@ export function HowItWorks() {
         </div>
       </div>
     </section>
+  );
 }

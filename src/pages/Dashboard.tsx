@@ -11,6 +11,7 @@ import {
   TrendingUp,
   Package,
 } from "lucide-react";
+
 export default function Dashboard() {
   return (
     <DashboardLayout
@@ -45,6 +46,7 @@ export default function Dashboard() {
           icon={<Users className="h-5 w-5" />}
         />
       </div>
+
       {/* Charts & Lists */}
       <div className="grid gap-6 lg:grid-cols-2 mb-6">
         <SalesChart />
@@ -67,7 +69,9 @@ export default function Dashboard() {
           <ConversationsList />
         </div>
       </div>
+
       {/* Recent Orders */}
       <RecentOrders />
     </DashboardLayout>
+  );
 }

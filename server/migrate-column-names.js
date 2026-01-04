@@ -9,7 +9,9 @@
  * 
  * WARNING: This will modify your Google Sheets. Make a backup first!
  */
+
 import { migrateAllSheetsToSnakeCase } from './google-sheets.js';
+
 // Run migration
 migrateAllSheetsToSnakeCase()
   .then(() => {

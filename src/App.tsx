@@ -8,7 +8,9 @@ import Dashboard from "./pages/Dashboard";
 import Orders from "./pages/Orders";
 import Conversations from "./pages/Conversations";
 import NotFound from "./pages/NotFound";
+
 const queryClient = new QueryClient();
+
 const App = () => (
   <QueryClientProvider client={queryClient}>
     <TooltipProvider>
@@ -26,4 +28,6 @@ const App = () => (
       </BrowserRouter>
     </TooltipProvider>
   </QueryClientProvider>
+);
+
 export default App;

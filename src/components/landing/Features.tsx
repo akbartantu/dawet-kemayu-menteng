@@ -8,6 +8,7 @@ import {
   Bell,
   BarChart3,
 } from "lucide-react";
+
 const features = [
   {
     icon: ShoppingCart,
@@ -58,6 +59,7 @@ const features = [
       "Complete visibility into cashflow, sales insights, customer patterns, and business analytics.",
   },
 ];
+
 export function Features() {
   return (
     <section className="py-24 bg-background">
@@ -72,6 +74,7 @@ export function Features() {
             sales, customers, and operations through WhatsApp.
           </p>
         </div>
+
         <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-6">
           {features.map((feature, index) => (
             <div
@@ -92,4 +95,5 @@ export function Features() {
         </div>
       </div>
     </section>
+  );
 }

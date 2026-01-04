@@ -2,19 +2,23 @@
  * Message Fallback Helpers
  * Provides friendly fallback responses for unhandled messages
  */
+
 // Cooldown map: chatId -> lastFallbackSent timestamp
 const fallbackCooldown = new Map();
 const FALLBACK_COOLDOWN_MS = 15000; // 15 seconds
+
 /**
  * Check if message is in English
  */
 function isEnglishMessage(text) {
   if (!text) return false;
+  
   // Simple heuristic: check for common English words
   const englishWords = ['hello', 'hi', 'help', 'menu', 'order', 'thanks', 'thank you', 'yes', 'no', 'ok', 'okay'];
   const textLower = text.toLowerCase();
   return englishWords.some(word => textLower.includes(word));
 }
+
 /**
  * Convert validation error to user-friendly Indonesian text
  */
@@ -25,8 +29,10 @@ function translateErrorToIndonesian(error) {
     'Address is required': 'Alamat',
     'At least one order item is required': 'Daftar pesanan (minimal 1 item)',
   };
+  
   return translations[error] || error;
 }
+
 /**
  * Get friendly fallback message
  */
@@ -44,6 +50,7 @@ export function getFallbackMessage(isEnglish = false) {
            `- 2x Dawet Kemayu Medium\n` +
            `- 1x Dawet Kemayu Large`;
   }
+  
   return `Halo! 👋 Aku bisa bantu catat pesanan kamu.\n\n` +
          `Kamu bisa ketik:\n` +
          `• /menu untuk lihat menu\n` +
@@ -57,12 +64,14 @@ export function getFallbackMessage(isEnglish = false) {
          `- 2x Dawet Kemayu Medium\n` +
          `- 1x Dawet Kemayu Large`;
 }
+
 /**
  * Get incomplete order message
  */
 export function getIncompleteOrderMessage(validationErrors, isEnglish = false) {
   // Translate errors to user-friendly Indonesian
   const friendlyErrors = validationErrors.map(translateErrorToIndonesian);
+  
   if (isEnglish) {
     return `I can see you're trying to place an order, but some information is missing 😊\n\n` +
            `**Missing fields:**\n` +
@@ -76,6 +85,7 @@ export function getIncompleteOrderMessage(validationErrors, isEnglish = false) {
            `- 1x Dawet Kemayu Large\n\n` +
            `Type /help for more details.`;
   }
+  
   return `Siap! Format pesanan kamu sudah kebaca, tapi masih kurang ya 😊\n\n` +
          `**Yang masih kurang:**\n` +
          friendlyErrors.map(err => `• ${err}`).join('\n') +
@@ -88,6 +98,7 @@ export function getIncompleteOrderMessage(validationErrors, isEnglish = false) {
          `- 1x Dawet Kemayu Large\n\n` +
          `Ketik /help untuk panduan lengkap.`;
 }
+
 /**
  * Check if fallback can be sent (cooldown check)
  */
@@ -96,20 +107,24 @@ export function canSendFallback(chatId) {
   if (!lastSent) {
     return true;
   }
+  
   const timeSinceLastSent = Date.now() - lastSent;
   return timeSinceLastSent >= FALLBACK_COOLDOWN_MS;
 }
+
 /**
  * Mark fallback as sent (update cooldown)
  */
 export function markFallbackSent(chatId) {
   fallbackCooldown.set(chatId, Date.now());
+  
   // Clean up old entries (keep only last 1000)
   if (fallbackCooldown.size > 1000) {
     const firstKey = fallbackCooldown.keys().next().value;
     fallbackCooldown.delete(firstKey);
   }
 }
+
 /**
  * Detect if message is in English
  */

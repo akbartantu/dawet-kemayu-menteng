@@ -1,117 +1,160 @@
-# DAWET Order Management System
+# 🍧 DAWET - Telegram Bot Order Management System
 
-Production-ready Telegram bot-based order management system with web dashboard.
+**Status**: ✅ Production Ready  
+**Last Updated**: 2026-01-03
 
-## Tech Stack
+---
 
-- **Frontend**: React, TypeScript, Vite, Tailwind CSS
-- **Backend**: Node.js, Express
-- **Storage**: Google Sheets API
-- **Bot**: Telegram Bot API
+## 📋 Overview
 
-## Prerequisites
+DAWET is a complete order management system for small food businesses, powered by a Telegram bot. Customers can place orders via Telegram, and merchants can manage orders through a web dashboard.
 
-- Node.js 18+ (or higher)
-- npm or yarn
-- Google Cloud Service Account (for Sheets API access)
-- Telegram Bot Token
+---
 
-## Installation
+## ✨ Current Features
 
-### 1. Install Dependencies
+### ✅ Working Features
 
-**Frontend:**
-```bash
-npm install
-```
+1. **Telegram Bot Integration**
+   - Receive and send messages
+   - Command handling:
+     - ✅ `/start` - Welcome message (working)
+     - ⚠️ `/menu` - Display menu (code exists, needs testing)
+     - ⚠️ `/help` - Help instructions (code exists, needs testing)
+   - FAQ handling (jam buka, lokasi, ongkir, pembayaran) - Automatic keyword detection
 
-**Backend:**
+2. **Order Management**
+   - Automatic order parsing from customer messages
+   - Order confirmation flow (Yes/No buttons)
+   - Invoice generation
+   - Payment notifications (DP 50% if >3 days, full payment if ≤3 days)
+   - Order status workflow
+   - Search & filter orders
+
+3. **Waiting List System**
+   - Automatic detection of future-dated orders
+   - Separate storage for waiting list
+   - Confirmation flow for future orders
+   - **Google Calendar integration** - Automatic calendar events with reminders
+
+4. **Google Sheets Storage**
+   - Messages, Conversations, Orders, PriceList, WaitingList sheets
+   - Automatic sheet creation
+   - Real-time updates
+
+5. **Frontend Dashboard**
+   - Orders management page
+   - Conversations page
+   - Real-time data updates
+   - Status management
+
+---
+
+## 🚀 Quick Start
+
+### Local Development
+
+**Backend**:
 ```bash
 cd server
 npm install
+# Create .env file with your credentials
+npm run dev
 ```
 
-### 2. Environment Configuration
+**Frontend**:
+```bash
+npm install
+npm run dev
+```
 
-Create environment files with the following variables:
+See `server/README.md` for detailed setup instructions.
 
-**Frontend (`.env`):**
+---
+
+## 📦 Deployment
+
+### Deploy to Render (Backend)
+
+1. Push code to GitHub
+2. Create Web Service on Render
+3. Set environment variables
+4. Configure Telegram webhook
+
+**Full guide**: See `DEPLOYMENT_GUIDE.md`
+
+### Deploy to Vercel/Render (Frontend)
+
+1. Connect GitHub repository
+2. Set `VITE_API_URL` environment variable
+3. Deploy!
+
+---
+
+## 📚 Documentation
+
+- **Current Features**: `CURRENT_FEATURES.md`
+- **Deployment Guide**: `DEPLOYMENT_GUIDE.md`
+- **Server Setup**: `server/README.md`
+- **Order Flow**: `server/ORDER_CONFIRMATION_FLOW.md`
+- **Price List**: `server/PRICE_LIST_GUIDE.md`
+
+---
+
+## 🔧 Environment Variables
+
+### Backend (`server/.env`)
+
+```env
+PORT=3001
+TELEGRAM_BOT_TOKEN=your_bot_token
+GOOGLE_SERVICE_ACCOUNT_KEY_FILE=service-account-key.json
+GOOGLE_SPREADSHEET_ID=your_spreadsheet_id
+NODE_ENV=development
+```
+
+### Frontend (`.env`)
+
 ```env
 VITE_API_URL=http://localhost:3001
 ```
 
-**Backend (`server/.env`):**
-```env
-PORT=3001
-NODE_ENV=production
+---
 
-# Telegram Bot
-TELEGRAM_BOT_TOKEN=your_telegram_bot_token
+## 📊 Project Structure
 
-# Google Sheets
-GOOGLE_SERVICE_ACCOUNT_KEY_FILE=path/to/service-account-key.json
-GOOGLE_SPREADSHEET_ID=your_spreadsheet_id
-
-# Optional: Admin Setup
-ADMIN_SETUP_CODE=your_admin_setup_code
-ADMIN_TELEGRAM_USER_IDS=comma_separated_user_ids
+```
+On Production/
+├── server/              # Backend (Node.js/Express)
+│   ├── server.js        # Main server file
+│   ├── google-sheets.js # Google Sheets integration
+│   ├── order-parser.js  # Order parsing logic
+│   ├── price-calculator.js # Price calculation & invoices
+│   └── bot-menu.js      # Bot menu & FAQ
+├── src/                 # Frontend (React/TypeScript)
+│   ├── pages/           # Page components
+│   ├── components/      # UI components
+│   └── lib/             # API client
+└── docs/                # Documentation
 ```
 
-**Important**: Never commit `.env` files. Use `.env.example` as a template.
+---
 
-## Running
+## 🎯 Next Steps
 
-### Development Mode
+1. **Deploy to Render** - Follow `DEPLOYMENT_GUIDE.md`
+2. **Set up Telegram webhook** - For production
+3. **Test end-to-end** - Verify all features work in production
+4. **Monitor** - Check logs and performance
 
-**Frontend:**
-```bash
-npm run dev
-```
-Runs on `http://localhost:8080` (or configured port)
+---
 
-**Backend:**
-```bash
-cd server
-npm run dev
-```
-Runs on `http://localhost:3001` (or configured PORT)
-
-### Production Build
-
-**Frontend:**
-```bash
-npm run build
-```
-Output: `dist/` directory
-
-**Backend:**
-```bash
-cd server
-node server.js
-```
-
-## Deployment Notes
-
-- Ensure all environment variables are set in production environment
-- Google Service Account must have access to the target Spreadsheet
-- Telegram webhook URL must be configured if using webhook mode (not polling)
-- Frontend build output (`dist/`) should be served by a web server (nginx, Apache, etc.)
-- Backend should run as a service (PM2, systemd, etc.)
-
-## Environment Variables Reference
-
-### Frontend
-- `VITE_API_URL` - Backend API base URL (required)
-
-### Backend
-- `PORT` - Server port (default: 3001)
-- `TELEGRAM_BOT_TOKEN` - Telegram bot token (required)
-- `GOOGLE_SERVICE_ACCOUNT_KEY_FILE` - Path to Google service account JSON key file (required)
-- `GOOGLE_SPREADSHEET_ID` - Google Spreadsheet ID (required)
-- `NODE_ENV` - Environment mode (production/development)
-- `ADMIN_SETUP_CODE` - Code for initial admin setup (optional)
-- `ADMIN_TELEGRAM_USER_IDS` - Comma-separated Telegram user IDs for admin access (optional, legacy)
-
-## License
+## 📝 License
 
 Private project - All rights reserved
+
+---
+
+## 🙏 Support
+
+For issues or questions, check the documentation files or contact the development team.
