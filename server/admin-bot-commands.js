@@ -3,6 +3,7 @@
  * Handles admin-specific bot commands for order and payment management
  * Implements PRD Admin Assistant requirements
  */
+
 import { 
   getAllOrders, 
   getOrderById, 
@@ -28,6 +29,7 @@ import {
   validatePaymentStatusTransition 
 } from './payment-tracker.js';
 import { updateOrderPayment } from './google-sheets.js';
+
 /**
  * Handle /admin_auth command - Bootstrap admin using setup code
  * @param {string} chatId - Telegram chat ID
@@ -39,24 +41,30 @@ export async function handleAdminAuth(chatId, userId, messageText, sendMessage) 
   try {
     const parts = messageText.split(' ');
     const code = parts[1];
+    
     if (!code) {
       await sendMessage(chatId, '❌ Format: /admin_auth <CODE>\n\nMasukkan kode setup admin yang valid.');
       return;
     }
+    
     const setupCode = process.env.ADMIN_SETUP_CODE;
     if (!setupCode) {
       await sendMessage(chatId, '❌ Admin setup tidak dikonfigurasi. Hubungi administrator sistem.');
       return;
     }
+    
     if (code !== setupCode) {
       await sendMessage(chatId, '❌ Kode tidak valid. Silakan coba lagi.');
       return;
     }
+    
     // Get user info from Telegram message context
     // We need display name - try to get from message or use default
     const displayName = 'Admin User'; // Could be enhanced to get from message.from
+    
     // Grant admin role
     await upsertUserRole('telegram', String(userId), displayName, 'admin', true);
+    
     await sendMessage(
       chatId,
       '✅ **Akses Admin Diberikan!**\n\n' +
@@ -68,6 +76,8 @@ export async function handleAdminAuth(chatId, userId, messageText, sendMessage) 
       '• /pay <ORDER_ID> <AMOUNT>\n' +
       '• /payment_status <ORDER_ID>\n' +
       '• /today_reminder'
+    );
+    
   } catch (error) {
     await sendMessage(chatId, '❌ Terjadi kesalahan saat memberikan akses admin. Silakan coba lagi.');
   }
@@ -83,45 +93,53 @@ export async function isAdmin(telegramUserId) {
   if (!telegramUserId) {
     return false;
   }
+  
   // Normalize userId to string and number for flexible matching
   const userIdString = String(telegramUserId);
   const userIdNumber = typeof telegramUserId === 'number' ? telegramUserId : parseInt(userIdString);
-  `);
+  
+  
   try {
     // First check Users sheet - try both string and number formats
     let role = await getUserRole('telegram', userIdString);
+    
     // If not found with string, try with number as string
     if (!role || role === 'customer') {
       role = await getUserRole('telegram', String(userIdNumber));
     }
+    
+    
     if (role === 'admin') {
-      `);
       return true;
     }
+    
     // Fallback to env var for backward compatibility
     const adminIds = process.env.ADMIN_TELEGRAM_USER_IDS 
       ? process.env.ADMIN_TELEGRAM_USER_IDS.split(',').map(id => parseInt(id.trim())).filter(id => !isNaN(id))
       : [];
+    
     const isEnvAdmin = adminIds.includes(userIdNumber);
     if (isEnvAdmin) {
-      `);
       return true;
     }
-    `);
+    
     return false;
   } catch (error) {
+    
     // Fallback to env var on error
     const adminIds = process.env.ADMIN_TELEGRAM_USER_IDS 
       ? process.env.ADMIN_TELEGRAM_USER_IDS.split(',').map(id => parseInt(id.trim())).filter(id => !isNaN(id))
       : [];
+    
     const isEnvAdmin = adminIds.includes(userIdNumber);
     if (isEnvAdmin) {
-      `);
       return true;
     }
+    
     return false;
   }
 }
+
 /**
  * Require admin role - throws error if not admin
  * @param {number} userId - Telegram user ID
@@ -136,6 +154,7 @@ export async function requireAdmin(userId, sendMessage, chatId) {
   }
   return true;
 }
+
 /**
  * Handle /new_order command
  * Creates empty order with generated ID
@@ -145,6 +164,7 @@ export async function handleNewOrder(chatId, userId, sendMessage) {
   if (!(await requireAdmin(userId, sendMessage, chatId))) {
     return;
   }
+
   try {
     const orderId = await generateOrderId();
     await sendMessage(
@@ -152,10 +172,12 @@ export async function handleNewOrder(chatId, userId, sendMessage) {
       `✅ **Order Baru Dibuat**\n\n` +
       `📋 Order ID: ${orderId}\n\n` +
       `Silakan kirim template pesanan untuk di-parse, atau gunakan /parse_order untuk memulai.`
+    );
   } catch (error) {
     await sendMessage(chatId, '❌ Terjadi kesalahan saat membuat order baru.');
   }
 }
+
 /**
  * Handle /parse_order command
  * Parses order template and saves to database
@@ -164,30 +186,38 @@ export async function handleParseOrder(chatId, userId, messageText, sendMessage)
   if (!(await requireAdmin(userId, sendMessage, chatId))) {
     return;
   }
+
   try {
     // Remove /parse_order command from message
     const orderText = messageText.replace(/^\/parse_order\s*/i, '').trim();
+    
     if (!orderText) {
       await sendMessage(
         chatId,
         '❌ Format tidak valid.\n\n' +
         'Gunakan: /parse_order [template pesanan]\n\n' +
         'Atau kirim template pesanan setelah perintah /parse_order.'
+      );
       return;
     }
+
     // Parse order from template
     const parsedOrder = parseOrderFromMessage(orderText);
     const validation = validateOrder(parsedOrder);
+
     if (!validation.valid) {
       await sendMessage(
         chatId,
         `❌ **Order tidak valid**\n\n` +
         `Kesalahan:\n${validation.errors.join('\n')}\n\n` +
         `Silakan perbaiki dan coba lagi.`
+      );
       return;
     }
+
     // Generate order ID
     const orderId = await generateOrderId();
+    
     // Create order data
     const orderData = {
       id: orderId,
@@ -203,11 +233,14 @@ export async function handleParseOrder(chatId, userId, messageText, sendMessage)
       status: 'pending',
       created_at: new Date().toISOString(),
     };
+
     // Save order
     await saveOrder(orderData);
+
     // Get price list and calculate totals
     const priceList = await getPriceList();
     const calculation = calculateOrderTotal(orderData.items, priceList);
+
     // Format order summary
     let summary = `✅ **ORDER SUMMARY**\n\n`;
     summary += `📋 Order ID: ${orderId}\n`;
@@ -227,11 +260,13 @@ export async function handleParseOrder(chatId, userId, messageText, sendMessage)
     });
     summary += `\n💰 **Total: Rp ${formatPrice(calculation.subtotal)}**\n`;
     summary += `\n✅ Order berhasil disimpan!`;
+
     await sendMessage(chatId, summary);
   } catch (error) {
     await sendMessage(chatId, '❌ Terjadi kesalahan saat memparse order. Silakan coba lagi.');
   }
 }
+
 /**
  * Handle /order_detail command
  * Shows full order details
@@ -241,30 +276,40 @@ export async function handleParseOrder(chatId, userId, messageText, sendMessage)
  * @param {Function} sendMessage - Function to send Telegram message
  */
 export async function handleOrderDetail(chatId, userId, orderId, sendMessage) {
+  
   try {
     // Check admin access
     const isUserAdmin = await isAdmin(userId);
+    
     if (!isUserAdmin) {
       await sendMessage(chatId, '❌ Anda tidak memiliki akses ke perintah ini. Perintah ini hanya untuk admin.');
       return;
     }
+
     if (!orderId || !orderId.trim()) {
       await sendMessage(chatId, '❌ Format: /order_detail <ORDER_ID>\n\nContoh: /order_detail DKM/20260104/000001');
       return;
     }
+
     const trimmedOrderId = orderId.trim();
+
     const order = await getOrderById(trimmedOrderId);
+    
     if (!order) {
       await sendMessage(chatId, `❌ Order ID "${trimmedOrderId}" tidak ditemukan.`);
       return;
     }
+
+
     // Get price list for calculation
     const priceList = await getPriceList();
     const calculation = calculateOrderTotal(order.items || [], priceList);
+
     // Format order detail with comprehensive information
     let detail = `📋 **ORDER DETAIL**\n\n`;
     detail += `**Order ID:** ${order.id}\n`;
     detail += `**Status:** ${order.status || 'N/A'}\n`;
+    
     // Payment info if available
     if (order.payment_status) {
       detail += `**Payment Status:** ${order.payment_status}\n`;
@@ -275,6 +320,7 @@ export async function handleOrderDetail(chatId, userId, orderId, sendMessage) {
         detail += `**Remaining:** Rp ${formatPrice(order.remaining_balance)}\n`;
       }
     }
+    
     detail += `\n👤 **Customer Info:**\n`;
     detail += `Nama Pemesan: ${order.customer_name || 'N/A'}\n`;
     if (order.receiver_name && order.receiver_name !== order.customer_name) {
@@ -282,6 +328,7 @@ export async function handleOrderDetail(chatId, userId, orderId, sendMessage) {
     }
     detail += `Phone: ${order.phone_number || 'N/A'}\n`;
     detail += `Address: ${order.address || 'N/A'}\n`;
+    
     if (order.event_name || order.event_date) {
       detail += `\n📅 **Event Info:**\n`;
       detail += `Event: ${order.event_name || 'N/A'}\n`;
@@ -292,6 +339,7 @@ export async function handleOrderDetail(chatId, userId, orderId, sendMessage) {
         detail += `Time: ${order.delivery_time}\n`;
       }
     }
+
     detail += `\n📦 **Items:**\n`;
     if (order.items && order.items.length > 0) {
       order.items.forEach((item, index) => {
@@ -300,26 +348,32 @@ export async function handleOrderDetail(chatId, userId, orderId, sendMessage) {
     } else {
       detail += `Tidak ada items\n`;
     }
+
     detail += `\n💰 **Total: Rp ${formatPrice(calculation.subtotal)}**\n`;
+    
     // Use total_amount (canonical) with fallback to final_total (legacy)
     const totalAmount = order.total_amount || order.final_total;
     if (totalAmount && totalAmount !== calculation.subtotal) {
       detail += `**Total Amount: Rp ${formatPrice(totalAmount)}**\n`;
     }
+    
     if (order.notes && order.notes.length > 0) {
       detail += `\n📝 **Notes:**\n${order.notes.join('\n')}\n`;
     }
+    
     if (order.created_at) {
       detail += `\n📅 **Created:** ${new Date(order.created_at).toLocaleString('id-ID')}\n`;
     }
     if (order.updated_at) {
       detail += `**Updated:** ${new Date(order.updated_at).toLocaleString('id-ID')}\n`;
     }
+
     await sendMessage(chatId, detail);
   } catch (error) {
     await sendMessage(chatId, '❌ Maaf, ada error saat memproses perintah ini. Coba lagi ya.');
   }
 }
+
 /**
  * Handle /status command
  * Quick status check
@@ -330,16 +384,20 @@ export async function handleStatus(chatId, userId, orderId, sendMessage) {
     await sendMessage(chatId, '❌ Anda tidak memiliki akses ke perintah ini.');
     return;
   }
+
   if (!orderId) {
     await sendMessage(chatId, '❌ Format: /status <order_id>');
     return;
   }
+
   try {
     const order = await getOrderById(orderId);
+    
     if (!order) {
       await sendMessage(chatId, `❌ Order ${orderId} tidak ditemukan.`);
       return;
     }
+
     await sendMessage(
       chatId,
       `📋 **Order Status**\n\n` +
@@ -347,28 +405,34 @@ export async function handleStatus(chatId, userId, orderId, sendMessage) {
       `Status: ${order.status}\n` +
       `Customer: ${order.customer_name || 'N/A'}\n` +
       `Created: ${order.created_at ? new Date(order.created_at).toLocaleString('id-ID') : 'N/A'}`
+    );
   } catch (error) {
     await sendMessage(chatId, '❌ Terjadi kesalahan saat mengambil status order.');
   }
 }
+
 /**
  * Handle /pay command
  * Update payment for an order (accumulates with existing paid amount)
  * @param {Function} sendMessage - Function to send Telegram message
  */
 export async function handlePay(chatId, userId, orderId, amountInput, sendMessage) {
+  
   if (!(await requireAdmin(userId, sendMessage, chatId))) {
     await sendMessage(chatId, '❌ Anda tidak memiliki akses ke perintah ini.');
     return;
   }
+
   if (!orderId || !amountInput) {
     await sendMessage(chatId, '❌ Format: /pay <ORDER_ID> <AMOUNT>\n\nContoh: /pay DKM/20260104/000001 235.000\nAtau: /pay DKM/20260104/000001 Rp 235.000');
     return;
   }
+
   try {
     // Parse Indonesian currency format
     const { parseIDRAmount } = await import('./payment-tracker.js');
     const newPaymentAmount = parseIDRAmount(amountInput);
+    
     if (newPaymentAmount === null) {
       await sendMessage(
         chatId,
@@ -379,11 +443,15 @@ export async function handlePay(chatId, userId, orderId, amountInput, sendMessag
         '• Rp 235.000\n' +
         '• 235000\n\n' +
         'Contoh: /pay DKM/20260104/000001 235.000'
+      );
       return;
     }
-    `);
+
+
     // Update payment (will accumulate with existing)
     const result = await updateOrderPayment(orderId, newPaymentAmount);
+    
+    
     const message = formatPaymentStatusMessage({
       id: result.orderId,
       total_amount: result.totalAmount || result.finalTotal, // Use totalAmount (canonical)
@@ -392,6 +460,7 @@ export async function handlePay(chatId, userId, orderId, amountInput, sendMessag
       payment_status: result.paymentStatus,
       remaining_balance: result.remainingBalance,
     });
+
     await sendMessage(chatId, message);
   } catch (error) {
     // Return early - do NOT show status card after error
@@ -399,6 +468,7 @@ export async function handlePay(chatId, userId, orderId, amountInput, sendMessag
     return; // Early return to prevent any further processing
   }
 }
+
 /**
  * Handle /payment_status command
  * Show payment status only
@@ -409,22 +479,27 @@ export async function handlePaymentStatus(chatId, userId, orderId, sendMessage) 
     await sendMessage(chatId, '❌ Anda tidak memiliki akses ke perintah ini.');
     return;
   }
+
   if (!orderId) {
     await sendMessage(chatId, '❌ Format: /payment_status <order_id>');
     return;
   }
+
   try {
     const order = await getOrderById(orderId);
+    
     if (!order) {
       await sendMessage(chatId, `❌ Order ${orderId} tidak ditemukan.`);
       return;
     }
+
     const message = formatPaymentStatusMessage(order);
     await sendMessage(chatId, message);
   } catch (error) {
     await sendMessage(chatId, '❌ Terjadi kesalahan saat mengambil status pembayaran.');
   }
 }
+
 /**
  * Get orders by event date
  * @param {string} targetDate - Date in YYYY-MM-DD format
@@ -435,20 +510,24 @@ async function getOrdersByDate(targetDate, paymentStatusFilter = null) {
   try {
     // Get all orders (we'll filter by date)
     const allOrders = await getAllOrders(10000); // Get large limit to ensure we get all orders
+    
     // Filter by event_date (must match exactly YYYY-MM-DD)
     // Defensive: normalize dates to YYYY-MM-DD format for comparison
     const filteredOrders = allOrders.filter(order => {
       const orderDate = (order.event_date || '').trim();
       if (!orderDate) return false;
+      
       // If already in YYYY-MM-DD format, compare directly
       if (/^\d{4}-\d{2}-\d{2}$/.test(orderDate)) {
         return orderDate === targetDate;
       }
+      
       // Try to normalize other formats (defensive, but should not be needed)
       // This handles legacy data if any exists
       try {
         const dateObj = new Date(orderDate);
         if (isNaN(dateObj.getTime())) return false;
+        
         const year = dateObj.getFullYear();
         const month = String(dateObj.getMonth() + 1).padStart(2, '0');
         const day = String(dateObj.getDate()).padStart(2, '0');
@@ -458,6 +537,7 @@ async function getOrdersByDate(targetDate, paymentStatusFilter = null) {
         return false;
       }
     });
+    
     // Remove duplicates by order_id (defensive - should not happen, but handle it)
     const uniqueOrders = [];
     const seenOrderIds = new Set();
@@ -471,9 +551,9 @@ async function getOrdersByDate(targetDate, paymentStatusFilter = null) {
         uniqueOrders.push(order);
       } else {
         // Duplicate found - log warning
-        `);
       }
     }
+    
     // Filter by payment status if specified
     let finalOrders = uniqueOrders;
     if (paymentStatusFilter) {
@@ -487,17 +567,20 @@ async function getOrdersByDate(targetDate, paymentStatusFilter = null) {
         return orderPaymentStatus === filterUpper;
       });
     }
+    
     // Sort by delivery_time (HH:MM format, lexicographically safe)
     finalOrders.sort((a, b) => {
       const timeA = (a.delivery_time || '').trim() || '99:99'; // Missing times go to bottom
       const timeB = (b.delivery_time || '').trim() || '99:99';
       return timeA.localeCompare(timeB);
     });
+    
     return finalOrders;
   } catch (error) {
     throw error;
   }
 }
+
 /**
  * Format items list for recap (bullet list format)
  * @param {Array|string} itemsJson - Order items array or JSON string
@@ -510,9 +593,11 @@ function formatItemsForRecap(itemsJson) {
     if (typeof itemsJson === 'string') {
       items = JSON.parse(itemsJson);
     }
+    
     if (!items || !Array.isArray(items) || items.length === 0) {
       return '- (tidak ada)';
     }
+    
     // Format as bullet list
     return items.map(item => {
       const name = item.name || item.item || 'Unknown';
@@ -527,6 +612,7 @@ function formatItemsForRecap(itemsJson) {
     return '- (tidak ada)';
   }
 }
+
 /**
  * Format notes list for recap (bullet list format)
  * @param {Array|string} notesJson - Order notes array or JSON string
@@ -538,6 +624,7 @@ function formatNotesForRecap(notesJson) {
     if (!notesJson || notesJson === '' || notesJson === '[]' || notesJson === 'null') {
       return '- (tidak ada)';
     }
+    
     // Parse if string
     let notes = notesJson;
     if (typeof notesJson === 'string') {
@@ -552,6 +639,7 @@ function formatNotesForRecap(notesJson) {
         return '- (tidak ada)';
       }
     }
+    
     // Handle array
     if (Array.isArray(notes)) {
       if (notes.length === 0) {
@@ -562,10 +650,12 @@ function formatNotesForRecap(notesJson) {
         return noteStr.trim() ? `- ${noteStr.trim()}` : '- (tidak ada)';
       }).join('\n');
     }
+    
     // Handle single string
     if (typeof notes === 'string' && notes.trim()) {
       return `- ${notes.trim()}`;
     }
+    
     return '- (tidak ada)';
   } catch (error) {
     // Fallback: try to display raw value
@@ -575,6 +665,7 @@ function formatNotesForRecap(notesJson) {
     return '- (tidak ada)';
   }
 }
+
 /**
  * Format order recap message (H-1 recap format)
  * @param {Array} orders - Array of orders sorted by delivery_time
@@ -585,38 +676,47 @@ function formatRecapMessage(orders, date) {
   if (orders.length === 0) {
     return `Tidak ada pesanan untuk besok (${date}).`;
   }
+  
   let message = `📋REKAP PESANAN (${date})\n`;
   message += `Total: ${orders.length} pesanan\n\n`;
+  
   orders.forEach((order, index) => {
     // Get delivery time (default to --:-- if missing/invalid)
     let deliveryTime = (order.delivery_time || '').trim();
     if (!deliveryTime || !/^\d{2}:\d{2}$/.test(deliveryTime)) {
       deliveryTime = '--:--';
     }
+    
     // Get other fields with defaults
     const customerName = order.customer_name || '-';
     const phoneNumber = order.phone_number || '-';
     const address = order.address || '-';
     const paymentStatus = order.payment_status || 'UNPAID';
     const remainingBalance = order.remaining_balance || 0;
+    
     // Get items: prefer parsed items array, fallback to items_json string
     const itemsData = order.items || order.items_json || '[]';
+    
     // Get notes: prefer parsed notes array, fallback to notes_json string
     const notesData = order.notes || order.notes_json || '[]';
+    
     // Calculate total cups and required styrofoam boxes
     let totalCups = 0;
     let hasPackagingInItems = false;
+    
     try {
       const items = typeof itemsData === 'string' ? JSON.parse(itemsData) : itemsData;
       if (Array.isArray(items)) {
         items.forEach(item => {
           const qty = parseInt(item.quantity || 0);
           const itemName = (item.name || item.item || '').toLowerCase();
+          
           // Check if packaging is in items
           if (itemName.includes('packaging') || itemName.includes('styrofoam')) {
             hasPackagingInItems = true;
             return;
           }
+          
           // Check if item is a cup-based product (Dawet Small/Medium/Large)
           if (itemName.includes('dawet') && 
               (itemName.includes('small') || 
@@ -631,8 +731,10 @@ function formatRecapMessage(orders, date) {
       }
     } catch (e) {
     }
+    
     // Calculate styrofoam boxes needed (1 box per 50 cups, rounded up)
     const styrofoamBoxes = totalCups > 0 ? Math.ceil(totalCups / 50) : 0;
+    
     // Format items list (replace packaging with calculated quantity)
     let itemsList = '';
     try {
@@ -641,6 +743,7 @@ function formatRecapMessage(orders, date) {
         let packagingShown = false;
         items.forEach(item => {
           const itemName = (item.name || item.item || '').toLowerCase();
+          
           // If this is a packaging item, show calculated quantity
           if (itemName.includes('packaging') || itemName.includes('styrofoam')) {
             if (styrofoamBoxes > 0) {
@@ -649,9 +752,11 @@ function formatRecapMessage(orders, date) {
             }
             return; // Skip original packaging item
           }
+          
           // Display other items normally
           itemsList += `• ${item.quantity || 0}x ${item.name || item.item || 'Unknown'}\n`;
         });
+        
         // If packaging needed but not in items, add it
         if (styrofoamBoxes > 0 && !packagingShown) {
           itemsList += `• ${styrofoamBoxes}x Packaging Styrofoam (50 cup)\n`;
@@ -660,9 +765,11 @@ function formatRecapMessage(orders, date) {
     } catch (e) {
       itemsList = '- (tidak ada)\n';
     }
+    
     if (!itemsList.trim()) {
       itemsList = '- (tidak ada)\n';
     }
+    
     // Format notes (single line format, not bullet list)
     let notesStr = '';
     try {
@@ -679,6 +786,7 @@ function formatRecapMessage(orders, date) {
           }
         }
       }
+      
       if (Array.isArray(notes) && notes.length > 0) {
         // Filter out empty notes
         const validNotes = notes.filter(note => note && String(note).trim());
@@ -696,6 +804,7 @@ function formatRecapMessage(orders, date) {
     } catch (e) {
       notesStr = '-';
     }
+    
     // Format payment status
     let paymentStatusText = paymentStatus.toUpperCase();
     if (paymentStatus.toUpperCase() === 'FULLPAID' || paymentStatus.toUpperCase() === 'FULL PAID' || paymentStatus.toUpperCase() === 'PAID') {
@@ -703,6 +812,7 @@ function formatRecapMessage(orders, date) {
     } else if (remainingBalance > 0) {
       paymentStatusText = `${paymentStatus} (Sisa: Rp ${formatPrice(remainingBalance)})`;
     }
+    
     // Build order block (new format)
     message += `👤 Customer: ${customerName}\n`;
     message += `📞 Phone: ${phoneNumber}\n`;
@@ -711,13 +821,16 @@ function formatRecapMessage(orders, date) {
     message += `📦 Items:\n${itemsList}`;
     message += `\n📝 Notes:\n${notesStr}\n\n`;
     message += `✅ Payment Status: ${paymentStatusText}\n\n`;
+    
     // Add separator between orders (except for the last one)
     if (index < orders.length - 1) {
       message += `─────────────────\n\n`;
     }
   });
+  
   return message;
 }
+
 /**
  * Format order list message (uses same detailed format as recap)
  * @param {Array} orders - Array of orders sorted by delivery_time
@@ -728,6 +841,7 @@ function formatOrderListMessage(orders, date) {
   if (orders.length === 0) {
     return `📅 Tidak ada pesanan untuk tanggal ${date}.`;
   }
+  
   // Remove duplicates by order_id (defensive)
   const uniqueOrders = [];
   const seenOrderIds = new Set();
@@ -741,39 +855,48 @@ function formatOrderListMessage(orders, date) {
       uniqueOrders.push(order);
     }
   }
+  
   // Use same format as recap message
   let message = `📋REKAP PESANAN (${date})\n`;
   message += `Total: ${uniqueOrders.length} pesanan\n\n`;
+  
   uniqueOrders.forEach((order, index) => {
     // Get delivery time (default to --:-- if missing/invalid)
     let deliveryTime = (order.delivery_time || '').trim();
     if (!deliveryTime || !/^\d{2}:\d{2}$/.test(deliveryTime)) {
       deliveryTime = '--:--';
     }
+    
     // Get other fields with defaults
     const customerName = order.customer_name || '-';
     const phoneNumber = order.phone_number || '-';
     const address = order.address || '-';
     const paymentStatus = order.payment_status || 'UNPAID';
     const remainingBalance = order.remaining_balance || 0;
+    
     // Get items: prefer parsed items array, fallback to items_json string
     const itemsData = order.items || order.items_json || '[]';
+    
     // Get notes: prefer parsed notes array, fallback to notes_json string
     const notesData = order.notes || order.notes_json || '[]';
+    
     // Calculate total cups and required styrofoam boxes
     let totalCups = 0;
     let hasPackagingInItems = false;
+    
     try {
       const items = typeof itemsData === 'string' ? JSON.parse(itemsData) : itemsData;
       if (Array.isArray(items)) {
         items.forEach(item => {
           const qty = parseInt(item.quantity || 0);
           const itemName = (item.name || item.item || '').toLowerCase();
+          
           // Check if packaging is in items
           if (itemName.includes('packaging') || itemName.includes('styrofoam')) {
             hasPackagingInItems = true;
             return;
           }
+          
           // Check if item is a cup-based product (Dawet Small/Medium/Large)
           if (itemName.includes('dawet') && 
               (itemName.includes('small') || 
@@ -788,8 +911,10 @@ function formatOrderListMessage(orders, date) {
       }
     } catch (e) {
     }
+    
     // Calculate styrofoam boxes needed (1 box per 50 cups, rounded up)
     const styrofoamBoxes = totalCups > 0 ? Math.ceil(totalCups / 50) : 0;
+    
     // Format items list (replace packaging with calculated quantity)
     let itemsList = '';
     try {
@@ -798,6 +923,7 @@ function formatOrderListMessage(orders, date) {
         let packagingShown = false;
         items.forEach(item => {
           const itemName = (item.name || item.item || '').toLowerCase();
+          
           // If this is a packaging item, show calculated quantity
           if (itemName.includes('packaging') || itemName.includes('styrofoam')) {
             if (styrofoamBoxes > 0) {
@@ -806,9 +932,11 @@ function formatOrderListMessage(orders, date) {
             }
             return; // Skip original packaging item
           }
+          
           // Display other items normally
           itemsList += `• ${item.quantity || 0}x ${item.name || item.item || 'Unknown'}\n`;
         });
+        
         // If packaging needed but not in items, add it
         if (styrofoamBoxes > 0 && !packagingShown) {
           itemsList += `• ${styrofoamBoxes}x Packaging Styrofoam (50 cup)\n`;
@@ -817,9 +945,11 @@ function formatOrderListMessage(orders, date) {
     } catch (e) {
       itemsList = '- (tidak ada)\n';
     }
+    
     if (!itemsList.trim()) {
       itemsList = '- (tidak ada)\n';
     }
+    
     // Format notes (single line format, not bullet list)
     let notesStr = '';
     try {
@@ -836,6 +966,7 @@ function formatOrderListMessage(orders, date) {
           }
         }
       }
+      
       if (Array.isArray(notes) && notes.length > 0) {
         // Filter out empty notes
         const validNotes = notes.filter(note => note && String(note).trim());
@@ -853,6 +984,7 @@ function formatOrderListMessage(orders, date) {
     } catch (e) {
       notesStr = '-';
     }
+    
     // Format payment status
     let paymentStatusText = paymentStatus.toUpperCase();
     if (paymentStatus.toUpperCase() === 'FULLPAID' || paymentStatus.toUpperCase() === 'FULL PAID' || paymentStatus.toUpperCase() === 'PAID') {
@@ -860,6 +992,7 @@ function formatOrderListMessage(orders, date) {
     } else if (remainingBalance > 0) {
       paymentStatusText = `${paymentStatus} (Sisa: Rp ${formatPrice(remainingBalance)})`;
     }
+    
     // Build order block (new format)
     message += `👤 Customer: ${customerName}\n`;
     message += `📞 Phone: ${phoneNumber}\n`;
@@ -868,13 +1001,16 @@ function formatOrderListMessage(orders, date) {
     message += `📦 Items:\n${itemsList}`;
     message += `\n📝 Notes:\n${notesStr}\n\n`;
     message += `✅ Payment Status: ${paymentStatusText}\n\n`;
+    
     // Add separator between orders (except for the last one)
     if (index < uniqueOrders.length - 1) {
       message += `─────────────────\n\n`;
     }
   });
+  
   return message;
 }
+
 /**
  * Get today's date in YYYY-MM-DD format (local timezone)
  * @returns {string} Today's date
@@ -886,6 +1022,7 @@ function getTodayDate() {
   const day = String(now.getDate()).padStart(2, '0');
   return `${year}-${month}-${day}`;
 }
+
 /**
  * Get tomorrow's date in YYYY-MM-DD format (local timezone)
  * @returns {string} Tomorrow's date
@@ -898,6 +1035,7 @@ function getTomorrowDate() {
   const day = String(tomorrow.getDate()).padStart(2, '0');
   return `${year}-${month}-${day}`;
 }
+
 /**
  * Handle /recap_h1 command - Show tomorrow's orders recap
  * @param {string} chatId - Telegram chat ID
@@ -906,26 +1044,33 @@ function getTomorrowDate() {
  */
 export async function handleRecapH1(chatId, userId, sendMessage) {
   try {
+    
     // Check admin access
     if (!(await isAdmin(userId))) {
       await sendMessage(chatId, 'Maaf, command ini hanya untuk admin.');
       return;
     }
+    
     // Get tomorrow's date
     const tomorrow = getTomorrowDate();
+    
     // Get orders for tomorrow (filter by FULLPAID only)
     const orders = await getOrdersByDate(tomorrow, 'FULLPAID');
+    
     // Log first 3 order IDs for sanity check
     if (orders.length > 0) {
       const orderIds = orders.slice(0, 3).map(o => o.id).join(', ');
     }
+    
     // Format and send recap message
     const message = formatRecapMessage(orders, tomorrow);
     await sendMessage(chatId, message);
+    
   } catch (error) {
     await sendMessage(chatId, '❌ Terjadi kesalahan saat mengambil rekapan pesanan. Silakan coba lagi.');
   }
 }
+
 /**
  * Handle /orders_date command - Show orders for a specific date
  * @param {string} chatId - Telegram chat ID
@@ -935,11 +1080,13 @@ export async function handleRecapH1(chatId, userId, sendMessage) {
  */
 export async function handleOrdersDate(chatId, userId, dateStr, sendMessage) {
   try {
+    
     // Check admin access
     if (!(await isAdmin(userId))) {
       await sendMessage(chatId, 'Maaf, command ini hanya untuk admin.');
       return;
     }
+    
     // Determine target date
     let targetDate;
     if (dateStr === 'today' || dateStr === 'hari ini') {
@@ -955,15 +1102,20 @@ export async function handleOrdersDate(chatId, userId, dateStr, sendMessage) {
       }
       targetDate = dateStr;
     }
+    
+    
     // Get orders for target date (filter by FULLPAID only)
     const orders = await getOrdersByDate(targetDate, 'FULLPAID');
+    
     // Log first 3 order IDs for sanity check
     if (orders.length > 0) {
       const orderIds = orders.slice(0, 3).map(o => o.id).join(', ');
     }
+    
     // Format and send list message
     const message = formatOrderListMessage(orders, targetDate);
     await sendMessage(chatId, message);
+    
   } catch (error) {
     await sendMessage(chatId, '❌ Terjadi kesalahan saat mengambil daftar pesanan. Silakan coba lagi.');
   }

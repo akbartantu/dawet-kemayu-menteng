@@ -3,10 +3,13 @@
  * Handles H-4, H-3, H-1 reminders for orders based on event date
  * Implements PRD reminder requirements
  */
+
 import { getAllOrders, getOrderById } from './google-sheets.js';
 import { google } from 'googleapis';
 import dotenv from 'dotenv';
+
 dotenv.config();
+
 // Google Sheets API setup
 let auth;
 if (process.env.GOOGLE_SERVICE_ACCOUNT_KEY) {
@@ -23,9 +26,12 @@ if (process.env.GOOGLE_SERVICE_ACCOUNT_KEY) {
 } else {
   throw new Error('Either GOOGLE_SERVICE_ACCOUNT_KEY or GOOGLE_SERVICE_ACCOUNT_KEY_FILE must be set');
 }
+
 const sheets = google.sheets({ version: 'v4', auth });
 const SPREADSHEET_ID = process.env.GOOGLE_SPREADSHEET_ID;
+
 const REMINDERS_SHEET = 'Reminders';
+
 /**
  * Ensure Reminders sheet exists with correct headers
  */
@@ -35,7 +41,9 @@ export async function ensureRemindersSheet() {
     const spreadsheet = await sheets.spreadsheets.get({
       spreadsheetId: SPREADSHEET_ID,
     });
+    
     const existingSheets = spreadsheet.data.sheets.map(s => s.properties.title);
+    
     if (!existingSheets.includes(REMINDERS_SHEET)) {
       // Create Reminders sheet
       await sheets.spreadsheets.batchUpdate({
@@ -50,6 +58,7 @@ export async function ensureRemindersSheet() {
           }],
         },
       });
+
       // Add headers
       await sheets.spreadsheets.values.update({
         spreadsheetId: SPREADSHEET_ID,
@@ -70,11 +79,13 @@ export async function ensureRemindersSheet() {
           ]],
         },
       });
+      
     }
   } catch (error) {
     throw error;
   }
 }
+
 /**
  * Check if reminder already exists (by Order ID and Reminder Type)
  * @param {string} orderId - Order ID
@@ -85,22 +96,26 @@ async function reminderExists(orderId, reminderType) {
   try {
     // Import header mapping functions
     const { getSheetHeaderMap } = await import('./google-sheets.js');
+    
     // Get header map using alias-based mapping (Reminders doesn't need snake_case enforcement)
     const headerMap = await getSheetHeaderMap(REMINDERS_SHEET, { requireSnakeCase: false });
     const orderIdColIndex = headerMap.order_id;
     const reminderTypeColIndex = headerMap.reminder_type;
+    
     if (orderIdColIndex === undefined || reminderTypeColIndex === undefined) {
       return false; // Assume doesn't exist if columns not found
     }
+    
     const response = await sheets.spreadsheets.values.get({
       spreadsheetId: SPREADSHEET_ID,
       range: `${REMINDERS_SHEET}!A:${String.fromCharCode(65 + headerMap.__headersLength - 1)}`,
     });
+
     const rows = response.data.values || [];
     if (rows.length <= 1) {
-      `);
       return false; // No data rows (only header)
     }
+
     // Check if reminder with same Order ID and Type exists using header mapping
     for (let i = 1; i < rows.length; i++) {
       const rowOrderId = rows[i][orderIdColIndex];
@@ -109,6 +124,7 @@ async function reminderExists(orderId, reminderType) {
         return true;
       }
     }
+
     return false;
   } catch (error) {
     if (error.stack) {
@@ -116,26 +132,34 @@ async function reminderExists(orderId, reminderType) {
     return false; // On error, assume doesn't exist (allow write)
   }
 }
+
 /**
  * Save reminder to Reminders sheet
  * Includes comprehensive logging and duplicate checking
  */
 export async function saveReminder(reminderData) {
   try {
+    
     await ensureRemindersSheet();
+    
     // Check for duplicate reminder (same Order ID + Reminder Type)
     const exists = await reminderExists(reminderData.orderId, reminderData.reminderType);
     if (exists) {
       return `${reminderData.orderId}_${reminderData.reminderType}_existing`;
     }
+    
     const reminderId = reminderData.id || `${reminderData.orderId}_${reminderData.reminderType}_${Date.now()}`;
+    
     // Import header mapping functions from google-sheets.js
     const { getSheetHeaderMap, buildRowFromMap, validateRequiredKeys } = await import('./google-sheets.js');
+    
     // Get header map using alias-based mapping (Reminders doesn't need snake_case enforcement)
     const headerMap = await getSheetHeaderMap(REMINDERS_SHEET, { requireSnakeCase: false });
+    
     // Validate required columns exist
     const requiredKeys = ['reminder_id', 'order_id', 'reminder_type', 'reminder_date', 'status'];
     validateRequiredKeys(headerMap, requiredKeys, REMINDERS_SHEET);
+    
     // Normalize reminder_date to YYYY-MM-DD format before saving
     let normalizedReminderDate = reminderData.reminderDate || '';
     if (normalizedReminderDate && !/^\d{4}-\d{2}-\d{2}$/.test(normalizedReminderDate)) {
@@ -146,6 +170,7 @@ export async function saveReminder(reminderData) {
         throw new Error(`Invalid reminder_date format: ${reminderData.reminderDate}. ${error.message}`);
       }
     }
+    
     // Prepare data object with snake_case keys
     const dataObject = {
       reminder_id: reminderId,
@@ -159,11 +184,15 @@ export async function saveReminder(reminderData) {
       created_at: reminderData.createdAt || new Date().toISOString(),
       notes: reminderData.notes || '',
     };
+    
     // Build row using header map
     const row = buildRowFromMap(headerMap, dataObject);
+    
+
     // Determine range dynamically based on header length
     const lastCol = String.fromCharCode(65 + headerMap.__headersLength - 1); // A=65
     const range = `${REMINDERS_SHEET}!A:${lastCol}`;
+
     await sheets.spreadsheets.values.append({
       spreadsheetId: SPREADSHEET_ID,
       range: range,
@@ -172,37 +201,45 @@ export async function saveReminder(reminderData) {
         values: [row],
       },
     });
+    
     return reminderId;
   } catch (error) {
     throw error;
   }
 }
+
 /**
  * Get reminders for a specific date
  */
 export async function getRemindersForDate(date) {
   try {
     await ensureRemindersSheet();
+    
     // Import header mapping functions
     const { getSheetHeaderMap } = await import('./google-sheets.js');
+    
     // Get header map using alias-based mapping (Reminders doesn't need snake_case enforcement)
     const headerMap = await getSheetHeaderMap(REMINDERS_SHEET, { requireSnakeCase: false });
+    
     const response = await sheets.spreadsheets.values.get({
       spreadsheetId: SPREADSHEET_ID,
       range: `${REMINDERS_SHEET}!A:${String.fromCharCode(65 + headerMap.__headersLength - 1)}`,
     });
+
     const rows = response.data.values || [];
     if (rows.length <= 1) {
-      `);
       return [];
     }
+
     const targetDate = date instanceof Date ? date.toISOString().split('T')[0] : date;
+    
     // Helper to get value from row by internal key
     const getValue = (row, internalKey, defaultValue = '') => {
       const colIndex = headerMap[internalKey];
       if (colIndex === undefined) return defaultValue;
       return row[colIndex] !== undefined && row[colIndex] !== '' ? row[colIndex] : defaultValue;
     };
+
     return rows.slice(1).map(row => ({
       id: getValue(row, 'reminder_id'),
       orderId: getValue(row, 'order_id'),
@@ -219,27 +256,32 @@ export async function getRemindersForDate(date) {
     return [];
   }
 }
+
 /**
  * Mark reminder as sent
  */
 export async function markReminderSent(reminderId) {
   try {
     const { getSheetHeaderMap } = await import('./google-sheets.js');
+    
     // Get header map using alias-based mapping (Reminders doesn't need snake_case enforcement)
     const headerMap = await getSheetHeaderMap(REMINDERS_SHEET, { requireSnakeCase: false });
     const reminderIdColIndex = headerMap.reminder_id;
+    
     if (reminderIdColIndex === undefined) {
       return false;
     }
+    
     const response = await sheets.spreadsheets.values.get({
       spreadsheetId: SPREADSHEET_ID,
       range: `${REMINDERS_SHEET}!A:${String.fromCharCode(65 + headerMap.__headersLength - 1)}`,
     });
+
     const rows = response.data.values || [];
     if (rows.length <= 1) {
-      `);
       return false;
     }
+
     // Find row with matching reminder ID using header mapping
     let rowIndex = -1;
     let reminderRow = null;
@@ -250,15 +292,20 @@ export async function markReminderSent(reminderId) {
         break;
       }
     }
+
     if (rowIndex === -1) {
       return false;
     }
+
     const now = new Date().toISOString();
+    
     // Get current attempts using header mapping
     const attemptsColIndex = headerMap.attempts;
     const currentAttempts = attemptsColIndex !== undefined ? (parseInt(reminderRow[attemptsColIndex] || 0) + 1) : 1;
+
     // Build update data using header mapping
     const updateData = [];
+    
     const updateColumn = (internalKey, value) => {
       const colIndex = headerMap[internalKey];
       if (colIndex !== undefined) {
@@ -271,11 +318,13 @@ export async function markReminderSent(reminderId) {
       }
       return false;
     };
+    
     // Update reminder fields using internal keys
     updateColumn('status', 'sent');
     updateColumn('sent_at', now);
     updateColumn('attempts', currentAttempts);
     updateColumn('last_attempt_at', now);
+
     if (updateData.length > 0) {
       await sheets.spreadsheets.values.batchUpdate({
         spreadsheetId: SPREADSHEET_ID,
@@ -285,11 +334,13 @@ export async function markReminderSent(reminderId) {
         },
       });
     }
+    
     return true;
   } catch (error) {
     return false;
   }
 }
+
 /**
  * Parse event date from DD/MM/YYYY format
  * Safe parser that handles DD/MM/YYYY format correctly
@@ -300,39 +351,45 @@ function parseEventDate(input) {
   if (!input || typeof input !== 'string') {
     return null;
   }
+  
   try {
     // Handle DD/MM/YYYY format
     if (input.includes('/')) {
       const parts = input.split('/');
       if (parts.length !== 3) {
-        : ${input}`);
         return null;
       }
+      
       const day = parseInt(parts[0], 10);
       const month = parseInt(parts[1], 10) - 1; // Month is 0-indexed
       let year = parseInt(parts[2], 10);
+      
       // Handle 2-digit years (assume 2000-2099)
       if (year < 100) {
         year += 2000;
       }
+      
       // Validate parsed values
       if (isNaN(day) || isNaN(month) || isNaN(year)) {
         return null;
       }
+      
       // Construct Date using local time (year, monthIndex, day)
       const date = new Date(year, month, day);
+      
       // Normalize to start of day (00:00)
       date.setHours(0, 0, 0, 0);
+      
       // Validate date
       if (isNaN(date.getTime())) {
         return null;
       }
+      
       // Verify the date matches input (catch month/day overflow)
       if (date.getDate() !== day || date.getMonth() !== month || date.getFullYear() !== year) {
-        }`);
         return null;
       }
-      .split('T')[0]}`);
+      
       return date;
     } else {
       // Try standard Date parsing as fallback
@@ -341,13 +398,13 @@ function parseEventDate(input) {
         return null;
       }
       date.setHours(0, 0, 0, 0);
-      : ${input} → ${date.toISOString().split('T')[0]}`);
       return date;
     }
   } catch (error) {
     return null;
   }
 }
+
 /**
  * Calculate reminder dates for an order (H-4, H-3, H-1)
  * Expects eventDate in YYYY-MM-DD format (normalized)
@@ -357,8 +414,11 @@ export function calculateReminderDates(eventDate) {
   if (!eventDate) {
     return null;
   }
+  
+  
   try {
     let date;
+    
     // If already in YYYY-MM-DD format, parse directly
     if (/^\d{4}-\d{2}-\d{2}$/.test(eventDate)) {
       date = new Date(eventDate + 'T00:00:00');
@@ -372,41 +432,50 @@ export function calculateReminderDates(eventDate) {
         return null;
       }
     }
+    
     // Normalize today to start of day for comparison
     const today = new Date();
     today.setHours(0, 0, 0, 0);
-    .split('T')[0]}, Today: ${today.toISOString().split('T')[0]}`);
+    
+    
     // Check if event date is in the future
     if (date <= today) {
-      .split('T')[0]} <= ${today.toISOString().split('T')[0]})`);
       return null;
     }
+    
     // Calculate reminder dates (H-4, H-3, H-1)
     const h4Date = new Date(date);
     h4Date.setDate(h4Date.getDate() - 4);
     h4Date.setHours(0, 0, 0, 0);
+    
     const h3Date = new Date(date);
     h3Date.setDate(h3Date.getDate() - 3);
     h3Date.setHours(0, 0, 0, 0);
+    
     const h1Date = new Date(date);
     h1Date.setDate(h1Date.getDate() - 1);
     h1Date.setHours(0, 0, 0, 0);
+    
     const reminderDates = {
       'H-4': h4Date.toISOString().split('T')[0],
       'H-3': h3Date.toISOString().split('T')[0],
       'H-1': h1Date.toISOString().split('T')[0],
     };
+    
     return reminderDates;
   } catch (error) {
     return null;
   }
 }
+
 // Use shared normalizeDeliveryTime from price-calculator for consistency
+
 /**
  * Create reminders for an order (H-4, H-3, H-1)
  * Includes comprehensive logging and error handling
  */
 export async function createOrderReminders(orderId, eventDate, orderData = null) {
+  
   try {
     // Normalize event_date to YYYY-MM-DD format if needed (defensive)
     let normalizedEventDate = eventDate;
@@ -418,15 +487,18 @@ export async function createOrderReminders(orderId, eventDate, orderData = null)
         return [];
       }
     }
+    
     // Normalize today for comparison
     const today = new Date();
     today.setHours(0, 0, 0, 0);
-    : ${today.toISOString().split('T')[0]}`);
+    
     // Calculate reminder dates (expects YYYY-MM-DD format)
     const reminderDates = calculateReminderDates(normalizedEventDate);
     if (!reminderDates) {
       return [];
     }
+
+
     // Get order data if not provided (for additional info like delivery time)
     let order = orderData;
     if (!order) {
@@ -440,6 +512,7 @@ export async function createOrderReminders(orderId, eventDate, orderData = null)
         // Continue without order data
       }
     }
+
     // Format delivery time if available (use shared normalizeDeliveryTime)
     let deliveryTime = '';
     if (order?.delivery_time) {
@@ -451,9 +524,11 @@ export async function createOrderReminders(orderId, eventDate, orderData = null)
         deliveryTime = order.delivery_time;
       }
     }
+
     const reminders = [];
     for (const [type, date] of Object.entries(reminderDates)) {
       try {
+        
         // Build reminder data
         const reminderData = {
           orderId,
@@ -464,19 +539,21 @@ export async function createOrderReminders(orderId, eventDate, orderData = null)
             `Customer: ${order.customer_name || 'N/A'}, Phone: ${order.phone_number || 'N/A'}, Event: ${order.event_name || 'N/A'}, Delivery Time: ${deliveryTime || 'TBD'}` :
             '',
         };
+        
         const reminderId = await saveReminder(reminderData);
         reminders.push({ id: reminderId, type, date });
-        for ${date}`);
+        
       } catch (error) {
         // Continue with other reminders even if one fails
       }
     }
-    for order ${orderId}`);
+
     return reminders;
   } catch (error) {
     return [];
   }
 }
+
 /**
  * Get reminder message based on type
  */
@@ -489,7 +566,9 @@ function getReminderMessage(order, reminderType) {
   const paidAmount = order.paid_amount || 0;
   const paymentStatus = order.payment_status || 'UNPAID';
   const remainingBalance = totalAmount - paidAmount;
+
   let message = '';
+  
   switch (reminderType) {
     case 'H-4':
       message = `🔔 **REMINDER H-4: PENGINGAT PEMBAYARAN**\n\n`;
@@ -506,6 +585,7 @@ function getReminderMessage(order, reminderType) {
         message += `✅ Pembayaran sudah lunas.`;
       }
       break;
+      
     case 'H-3':
       message = `🔔 **REMINDER H-3: PESANAN BAHAN BAKU**\n\n`;
       message += `📋 Order ID: ${orderId}\n`;
@@ -514,6 +594,7 @@ function getReminderMessage(order, reminderType) {
       message += `⚠️ **Action Required:**\n`;
       message += `Silakan pesan bahan baku untuk order ini!`;
       break;
+      
     case 'H-1':
       message = `🔔 **REMINDER H-1: PERSIAPAN OUTLET**\n\n`;
       message += `📋 Order ID: ${orderId}\n`;
@@ -523,17 +604,21 @@ function getReminderMessage(order, reminderType) {
       message += `⚠️ **Action Required:**\n`;
       message += `Silakan persiapkan outlet untuk order ini!`;
       break;
+      
     default:
       message = `🔔 **REMINDER**\n\nOrder ID: ${orderId}`;
   }
+
   return message;
 }
+
 /**
  * Format Rupiah currency
  */
 function formatRupiah(amount) {
   return new Intl.NumberFormat('id-ID').format(amount);
 }
+
 /**
  * Send reminder to admin
  * @param {Function} sendMessage - Function to send Telegram message
@@ -543,10 +628,13 @@ export async function sendReminderToAdmin(order, reminderType, sendMessage) {
     const adminIds = process.env.ADMIN_TELEGRAM_USER_IDS 
       ? process.env.ADMIN_TELEGRAM_USER_IDS.split(',').map(id => parseInt(id.trim()))
       : [];
+    
     if (adminIds.length === 0) {
       return false;
     }
+
     const message = getReminderMessage(order, reminderType);
+    
     // Send to all admins
     for (const adminId of adminIds) {
       try {
@@ -554,11 +642,13 @@ export async function sendReminderToAdmin(order, reminderType, sendMessage) {
       } catch (error) {
       }
     }
+    
     return true;
   } catch (error) {
     return false;
   }
 }
+
 /**
  * Check and send reminders for today
  * @param {Function} sendMessage - Function to send Telegram message
@@ -567,28 +657,34 @@ export async function checkAndSendRemindersForToday(sendMessage) {
   try {
     const today = new Date().toISOString().split('T')[0];
     const reminders = await getRemindersForDate(today);
+    
     if (reminders.length === 0) {
       return;
     }
-    for today`);
+    
+    
     for (const reminder of reminders) {
       try {
         const order = await getOrderById(reminder.orderId);
+        
         if (!order) {
           continue;
         }
+        
         // Check cooldown (min 6 hours between reminders of same type)
         if (reminder.lastAttemptAt) {
           const lastAttempt = new Date(reminder.lastAttemptAt);
           const now = new Date();
           const hoursSinceLastAttempt = (now - lastAttempt) / (1000 * 60 * 60);
+          
           if (hoursSinceLastAttempt < 6) {
-            }h)`);
             continue;
           }
         }
+        
         // Send reminder
         const sent = await sendReminderToAdmin(order, reminder.reminderType, sendMessage);
+        
         if (sent) {
           await markReminderSent(reminder.id);
         } else {

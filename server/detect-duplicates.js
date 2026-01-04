@@ -7,17 +7,18 @@
  * 
  * If sheetName is not provided, checks both Orders and WaitingList
  */
+
 import { detectDuplicateOrders } from './google-sheets.js';
+
 const sheetName = process.argv[2] || null;
+
 if (sheetName) {
   detectDuplicateOrders(sheetName)
     .then((duplicates) => {
       if (duplicates.length === 0) {
         process.exit(0);
       } else {
-        :`);
         duplicates.forEach(dup => {
-          }`);
         });
         process.exit(1);
       }
@@ -35,17 +36,12 @@ if (sheetName) {
       if (totalDups === 0) {
         process.exit(0);
       } else {
-        total:`);
         if (ordersDups.length > 0) {
-          `);
           ordersDups.forEach(dup => {
-            }`);
           });
         }
         if (waitingListDups.length > 0) {
-          `);
           waitingListDups.forEach(dup => {
-            }`);
           });
         }
         process.exit(1);
