@@ -2,10 +2,8 @@
  * Price Calculator
  * Calculates order totals from parsed items using price list
  */
-
 import { daysUntilDelivery } from './date-utils.js';
 import { calculateMinDP } from './payment-tracker.js';
-
 /**
  * Parse item name to extract base item and toppings
  * Examples:
@@ -16,19 +14,15 @@ import { calculateMinDP } from './payment-tracker.js';
 export function parseItemName(itemName) {
   const cleanName = itemName.trim();
   const nameLower = cleanName.toLowerCase();
-  
   // Normalize "toping" -> "topping" typo
   const normalizedName = nameLower.replace(/\btoping\b/g, 'topping');
-  
   // Check if it contains "+" (has toppings separated by +)
   if (cleanName.includes('+')) {
     const parts = cleanName.split('+').map(p => p.trim());
     const basePart = parts[0];
     const toppings = parts.slice(1).map(t => t.trim());
-    
     // Normalize base item name
     let baseItem = normalizeBaseItemName(basePart);
-    
     // Normalize topping names
     const normalizedToppings = toppings.map(topping => {
       const lower = topping.toLowerCase().trim().replace(/\btoping\b/g, 'topping');
@@ -41,22 +35,18 @@ export function parseItemName(itemName) {
       const capitalized = lower.charAt(0).toUpperCase() + lower.slice(1);
       return `Topping ${capitalized}`;
     });
-    
     return {
       base: baseItem,
       toppings: normalizedToppings,
     };
   }
-  
   // Check if item name contains topping keywords (e.g., "Dawet Kemayu Large Toping Nangka")
   // Extract base and topping from single string
   const toppingKeywords = ['topping', 'toping', 'nangka', 'durian'];
   const hasToppingKeyword = toppingKeywords.some(keyword => normalizedName.includes(keyword));
-  
   if (hasToppingKeyword) {
     // Extract size and normalize base
     let baseItem = normalizeBaseItemName(cleanName);
-    
     // Extract topping from the name
     const toppings = [];
     if (normalizedName.includes('nangka')) {
@@ -65,22 +55,18 @@ export function parseItemName(itemName) {
     if (normalizedName.includes('durian')) {
       toppings.push('Topping Durian');
     }
-    
     return {
       base: baseItem,
       toppings: toppings,
     };
   }
-  
   // No toppings, just normalize the base item
   const normalizedBase = normalizeBaseItemName(cleanName);
-  
   return {
     base: normalizedBase,
     toppings: [],
   };
 }
-
 /**
  * Normalize base item name (extract size and format consistently)
  * @param {string} itemName - Item name to normalize
@@ -88,18 +74,15 @@ export function parseItemName(itemName) {
  */
 function normalizeBaseItemName(itemName) {
   const nameLower = itemName.toLowerCase().trim();
-  
   // Extract size if present
   const sizeMatch = nameLower.match(/(small|medium|large)/i);
   if (sizeMatch) {
     const size = sizeMatch[1].toLowerCase();
     return `Dawet Kemayu ${size.charAt(0).toUpperCase() + size.slice(1)}`;
   }
-  
   if (nameLower.match(/dawet\s+medium\s+original/i)) {
     return 'Dawet Kemayu Medium';
   }
-  
   if (nameLower.includes('dawet')) {
     // Handle cases where size might be in the full name
     if (nameLower.includes('large')) {
@@ -110,11 +93,9 @@ function normalizeBaseItemName(itemName) {
       return 'Dawet Kemayu Small';
     }
   }
-  
   // Return as-is if no pattern matches
   return itemName;
 }
-
 /**
  * Normalize product name for price lookup
  * Handles typos, spacing, casing, and common variations
@@ -125,7 +106,6 @@ export function normalizeProductName(name) {
   if (!name || typeof name !== 'string') {
     return '';
   }
-  
   let normalized = name
     .trim()
     .toLowerCase()
@@ -133,15 +113,12 @@ export function normalizeProductName(name) {
     .replace(/\s+/g, ' ') // Collapse multiple spaces
     .replace(/[^\w\s+]/g, '') // Remove punctuation (keep + for toppings)
     .trim();
-  
   // Standardize common typos/variants
   normalized = normalized
     .replace(/\btoping\b/g, 'topping') // "toping" -> "topping"
     .replace(/\btopping\b/g, 'topping'); // Ensure consistent
-  
   return normalized;
 }
-
 /**
  * Get unit price from PriceList with improved matching
  * Uses normalization and fuzzy matching for better price lookup
@@ -153,31 +130,25 @@ export function getUnitPriceFromPriceList(itemName, priceList) {
   if (!itemName || !priceList || typeof priceList !== 'object') {
     return null;
   }
-  
   const normalizedItemName = normalizeProductName(itemName);
-  console.log(`🔍 [PRICE] Looking up price for item: "${itemName}" (normalized: "${normalizedItemName}")`);
-  
+  `);
   // Strategy A: Exact match on normalized name
   for (const [priceListKey, price] of Object.entries(priceList)) {
     const normalizedKey = normalizeProductName(priceListKey);
     if (normalizedKey === normalizedItemName) {
-      console.log(`✅ [PRICE] Exact match found: "${priceListKey}" -> ${price}`);
       return price;
     }
   }
-  
   // Strategy B: Fuzzy match (contains/includes) for known patterns
   // Check if item contains key components (dawet, size, topping)
   const itemParts = normalizedItemName.split(/\s+/);
   const hasDawet = itemParts.some(p => p.includes('dawet'));
   const hasSize = itemParts.some(p => ['small', 'medium', 'large'].includes(p));
   const hasTopping = itemParts.some(p => ['nangka', 'durian', 'topping'].includes(p));
-  
   if (hasDawet && hasSize) {
     // Try to match base product + topping
     for (const [priceListKey, price] of Object.entries(priceList)) {
       const normalizedKey = normalizeProductName(priceListKey);
-      
       // Check if all key parts match
       let matches = true;
       if (hasSize) {
@@ -192,27 +163,22 @@ export function getUnitPriceFromPriceList(itemName, priceList) {
           matches = false;
         }
       }
-      
       if (matches && normalizedKey.includes('dawet')) {
-        console.log(`✅ [PRICE] Fuzzy match found: "${priceListKey}" -> ${price}`);
         return price;
       }
     }
   }
-  
   // Strategy C: Try parsing item name (for items with toppings)
   try {
     const parsed = parseItemName(itemName);
     if (parsed.base) {
       const basePrice = priceList[parsed.base] || null;
       if (basePrice) {
-        console.log(`✅ [PRICE] Found base price via parsing: "${parsed.base}" -> ${basePrice}`);
         // Add topping prices if any
         let totalPrice = basePrice;
         for (const topping of parsed.toppings) {
           const toppingPrice = priceList[topping] || 0;
           if (toppingPrice > 0) {
-            console.log(`🔍 [PRICE] Found topping price: "${topping}" -> ${toppingPrice}`);
             totalPrice += toppingPrice;
           }
         }
@@ -221,68 +187,51 @@ export function getUnitPriceFromPriceList(itemName, priceList) {
     }
   } catch (error) {
     // Parsing failed, continue to return null
-    console.warn(`⚠️ [PRICE] Parsing failed for "${itemName}":`, error.message);
   }
-  
-  console.warn(`⚠️ [PRICE] Not found for: "${normalizedItemName}" (original: "${itemName}")`);
+  `);
   return null;
 }
-
 /**
  * Calculate total price for an order
  */
 export function calculateOrderTotal(items, priceList) {
   let subtotal = 0;
   const itemDetails = [];
-  
   for (const item of items) {
-    console.log(`🔍 [PRICE] Processing item: ${item.quantity}x ${item.name}`);
-    
     // Use improved price lookup with normalization
     let unitPrice = getUnitPriceFromPriceList(item.name, priceList);
     let parsed = null;
     let toppingPrices = [];
-    
     // If not found via improved lookup, try direct lookup and parsing as fallback
     if (unitPrice === null) {
       // Fallback: Check if item name exists directly in price list
       unitPrice = priceList[item.name] || null;
-      
       // If still not found, try parsing (for items with toppings like "Dawet Medium + Nangka")
       if (unitPrice === null) {
         parsed = parseItemName(item.name);
         const basePrice = priceList[parsed.base] || null;
-        
         if (basePrice !== null) {
           unitPrice = basePrice;
-          
           // Add topping prices
           toppingPrices = parsed.toppings.map(topping => {
             const toppingPrice = priceList[topping] || 0;
             if (toppingPrice > 0) {
-              console.log(`🔍 [PRICE] Found topping price: "${topping}" -> ${toppingPrice}`);
             }
             return toppingPrice;
           });
-          
           // Add topping prices to unit price
           const toppingsTotal = toppingPrices.reduce((sum, price) => sum + price, 0);
           unitPrice += toppingsTotal;
         }
       }
     }
-    
     // Calculate item total
     let itemTotal = 0;
     if (unitPrice !== null && unitPrice > 0) {
       itemTotal = unitPrice * item.quantity;
-      console.log(`✅ [PRICE] Item: ${item.quantity}x ${item.name} - Unit: ${unitPrice}, Total: ${itemTotal}`);
     } else {
-      console.warn(`⚠️ [PRICE] Price not found for item: "${item.name}" - will show "Harga belum tersedia"`);
     }
-    
     subtotal += itemTotal;
-    
     itemDetails.push({
       name: item.name,
       quantity: item.quantity,
@@ -293,13 +242,11 @@ export function calculateOrderTotal(items, priceList) {
       priceFound: unitPrice !== null && unitPrice > 0, // Flag to indicate if price was found
     });
   }
-  
   return {
     subtotal: subtotal,
     itemDetails: itemDetails,
   };
 }
-
 /**
  * Normalize delivery time to HH:MM format for storage
  * Accepts various input formats and always outputs HH:MM (24-hour)
@@ -311,34 +258,27 @@ export function normalizeDeliveryTime(timeStr) {
   if (!timeStr || typeof timeStr !== 'string') {
     throw new Error(`Invalid delivery_time input: ${timeStr}`);
   }
-  
   const trimmed = timeStr.trim();
   if (!trimmed) {
     throw new Error('Empty delivery_time string');
   }
-  
   // Step 1: Remove markdown formatting (asterisks, bold, etc.)
   let cleaned = trimmed
     .replace(/\*+/g, '') // Remove asterisks
     .replace(/_+/g, '') // Remove underscores
     .replace(/~+/g, '') // Remove tildes
     .trim();
-  
   // Step 2: Remove common timezone suffixes (WIB, WITA, WIT, etc.)
   cleaned = cleaned
     .replace(/\s*(WIB|WITA|WIT|AM|PM|am|pm)\s*$/i, '')
     .trim();
-  
   // Step 3: Extract time pattern using regex (more flexible - finds time anywhere in string)
   // Look for patterns like: HH:MM, H:MM, HH.MM, H.MM, or single digits
   // This handles cases like "*Kirim dari outlet: 10.45 WIB*" by finding "10.45" anywhere
-  
   let hours, minutes;
   let timeMatch = null;
-  
   // Strategy: Use regex to find time pattern anywhere in the string
   // This works even with complex prefixes like "Kirim dari outlet:"
-  
   // Try to match HH:MM or H:MM pattern (with colon) - find anywhere in string
   timeMatch = cleaned.match(/(\d{1,2}):(\d{1,2})/);
   if (timeMatch) {
@@ -363,17 +303,14 @@ export function normalizeDeliveryTime(timeStr) {
       }
     }
   }
-  
   // If still no match, throw error
   if (!timeMatch) {
     throw new Error(`Cannot parse time format: ${trimmed}`);
   }
-  
   // Validate parsed values
   if (isNaN(hours) || isNaN(minutes)) {
     throw new Error(`Invalid time parts - hours: ${hours}, minutes: ${minutes} from input: ${trimmed}`);
   }
-  
   // Validate ranges
   if (hours < 0 || hours > 23) {
     throw new Error(`Invalid hours: ${hours} (must be 0-23) from input: ${trimmed}`);
@@ -381,14 +318,10 @@ export function normalizeDeliveryTime(timeStr) {
   if (minutes < 0 || minutes > 59) {
     throw new Error(`Invalid minutes: ${minutes} (must be 0-59) from input: ${trimmed}`);
   }
-  
   // Format as HH:MM
   const formatted = `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`;
-  
-  console.log(`✅ [NORMALIZE_DELIVERY_TIME] "${trimmed}" → "${formatted}"`);
   return formatted;
 }
-
 /**
  * Format time to HH:MM (remove any extra text like "kirim:", "WIB", etc.)
  * Helper function for formatting delivery time consistently across all messages
@@ -399,48 +332,38 @@ function formatTime(timeStr) {
   if (!timeStr || typeof timeStr !== 'string' || !timeStr.trim()) {
     return '-';
   }
-  
   try {
     const normalized = normalizeDeliveryTime(timeStr);
     return normalized || '-';
   } catch (error) {
     // If normalization fails (invalid format), return "-" instead of crashing
-    console.warn(`⚠️ [FORMAT_TIME] Failed to normalize delivery_time "${timeStr}":`, error.message);
     return '-';
   }
 }
-
 /**
  * Format invoice message
  */
 export function formatInvoice(order, priceList) {
   const calculation = calculateOrderTotal(order.items, priceList);
-  
   // Helper to format empty fields as "-"
   const formatField = (value) => value || '-';
-  
   // Get invoice number (order ID)
   const invoiceNumber = order.id || 'N/A';
-  
   // Get customer info (map customer_name to both nama_pemesan and nama_penerima if receiver_name not available)
   const namaPemesan = order.customer_name || '-';
   const namaPenerima = order.receiver_name || order.customer_name || '-';
   const noHp = formatField(order.phone_number);
   const alamat = formatField(order.address);
-  
   // Get event info
   const namaEvent = formatField(order.event_name);
   const tanggalEvent = formatField(order.event_date);
   const waktuKirim = formatTime(order.delivery_time);
-  
   // Calculate totals
   const subtotal = calculation.subtotal;
-  
   // Use packaging_fee from order (already calculated based on total cups)
   // If not available, calculate from items as fallback
   let packagingPrice = 0;
   let packagingFound = false;
-  
   if (order.packaging_fee !== undefined && order.packaging_fee !== null) {
     // Use stored packaging_fee (calculated correctly based on cups)
     packagingPrice = parseFloat(order.packaging_fee) || 0;
@@ -450,21 +373,17 @@ export function formatInvoice(order, priceList) {
     const packagingItem = calculation.itemDetails.find(detail => 
       detail.name.toLowerCase().includes('packaging') || 
       detail.name.toLowerCase().includes('styrofoam')
-    );
     if (packagingItem) {
       packagingPrice = packagingItem.itemTotal;
       packagingFound = true;
     }
   }
-  
   const shippingPrice = order.delivery_fee || 0;
   // Use total_amount (canonical) with fallback to final_total (legacy) or calculated
   const totalAmount = order.total_amount || order.final_total || subtotal + packagingPrice + shippingPrice;
   const dpMinimum = calculateMinDP(totalAmount);
-  
   // Get shipping method
   const metodePengiriman = order.shipping_method || order.delivery_method || '-';
-  
   // Build item list with prices (exclude packaging if found)
   let itemList = '';
   calculation.itemDetails.forEach((detail) => {
@@ -473,20 +392,16 @@ export function formatInvoice(order, priceList) {
         detail.name.toLowerCase().includes('styrofoam'))) {
       return;
     }
-    
     // Show price or "Harga belum tersedia" if price not found
     if (detail.priceFound && detail.itemTotal > 0) {
       itemList += `${detail.quantity}x ${detail.name} - Rp${formatPrice(detail.itemTotal)}\n`;
     } else {
       itemList += `${detail.quantity}x ${detail.name} - Harga belum tersedia\n`;
-      console.warn(`⚠️ [INVOICE] Item "${detail.name}" has no price - showing "Harga belum tersedia"`);
     }
   });
-  
   if (!itemList.trim()) {
     itemList = '-';
   }
-  
   // Build invoice
   let invoice = `🧾 REKAP PESANAN & PEMBAYARAN\n`;
   invoice += `Dawet Kemayu Menteng 🌿\n\n`;
@@ -504,13 +419,11 @@ export function formatInvoice(order, priceList) {
   invoice += `Waktu Kirim: ${waktuKirim}\n\n`;
   invoice += `--------------------------------\n`;
   invoice += `Pesanan:\n${itemList}\n`;
-  
   if (packagingFound) {
     invoice += `Packaging Styrofoam: Rp${formatPrice(packagingPrice)}\n`;
   } else {
     invoice += `Packaging Styrofoam: -\n`;
   }
-  
   invoice += `Pengiriman: ${metodePengiriman}\n`;
   invoice += `Ongkir: Rp${formatPrice(shippingPrice)}\n\n`;
   invoice += `--------------------------------\n`;
@@ -530,10 +443,8 @@ export function formatInvoice(order, priceList) {
   invoice += `• Pelunasan maksimal H-4 sebelum pengiriman\n\n`;
   invoice += `--------------------------------\n`;
   invoice += `Terima kasih atas kepercayaan Anda!`;
-  
   return invoice;
 }
-
 /**
  * Separate items from notes by checking price list
  * If a note matches an item in the price list, treat it as an item (quantity 1)
@@ -541,27 +452,23 @@ export function formatInvoice(order, priceList) {
 export function separateItemsFromNotes(items, notes, priceList) {
   const finalItems = [...items];
   const finalNotes = [];
-  
   // Check each note against price list
   for (const note of notes) {
     const noteLower = note.toLowerCase().trim();
     let found = false;
-    
     // Try to find match in price list (case-insensitive)
     for (const priceListKey of Object.keys(priceList)) {
       const keyLower = priceListKey.toLowerCase().trim();
-      
       // Exact match (case-insensitive)
       if (keyLower === noteLower) {
         finalItems.push({
           quantity: 1,
           name: priceListKey, // Use the exact name from price list
         });
-        console.log(`📦 Moved "${note}" from notes to items (exact match: "${priceListKey}")`);
+        `);
         found = true;
         break;
       }
-      
       // Smart partial match - normalize both strings for comparison
       // Remove common words and compare remaining words
       const normalize = (str) => {
@@ -570,10 +477,8 @@ export function separateItemsFromNotes(items, notes, priceList) {
           .replace(/\s+/g, ' ') // Normalize spaces
           .trim();
       };
-      
       const normalizedNote = normalize(note);
       const normalizedKey = normalize(priceListKey);
-      
       // Check if normalized strings are similar (one contains the other or vice versa)
       if (normalizedNote === normalizedKey || 
           normalizedNote.includes(normalizedKey) || 
@@ -581,43 +486,37 @@ export function separateItemsFromNotes(items, notes, priceList) {
         // Additional check: make sure all significant words match
         const noteWords = normalizedNote.split(/\s+/).filter(w => w.length > 2);
         const keyWords = normalizedKey.split(/\s+/).filter(w => w.length > 2);
-        
         // If most words match, consider it a match
         const matchingWords = noteWords.filter(w => keyWords.includes(w));
         const matchRatio = matchingWords.length / Math.max(noteWords.length, keyWords.length);
-        
         if (matchRatio >= 0.6 || matchingWords.length >= 2) {
           finalItems.push({
             quantity: 1,
             name: priceListKey,
           });
-          console.log(`📦 Moved "${note}" from notes to items (match: "${priceListKey}")`);
+          `);
           found = true;
           break;
         }
       }
     }
-    
     if (!found) {
       // Keep as note
       finalNotes.push(note);
-      console.log(`📝 Keeping "${note}" as note (not found in price list)`);
+      `);
     }
   }
-  
   return {
     items: finalItems,
     notes: finalNotes,
   };
 }
-
 /**
  * Format price with thousand separators
  */
 export function formatPrice(price) {
   return price.toString().replace(/\B(?=(\d{3})+(?!\d))/g, '.');
 }
-
 /**
  * Format payment notification message based on delivery date
  * - If delivery date is more than 3 days away: 50% down payment
@@ -625,7 +524,6 @@ export function formatPrice(price) {
  */
 export function formatPaymentNotification(order, totalAmount) {
   let daysUntil = null;
-  
   if (order.event_date) {
     // Parse date manually to avoid circular dependency
     const parts = order.event_date.split('/');
@@ -634,25 +532,20 @@ export function formatPaymentNotification(order, totalAmount) {
       const month = parseInt(parts[1]) - 1;
       let year = parseInt(parts[2]);
       if (year < 100) year += 2000;
-      
       const deliveryDate = new Date(year, month, day);
       deliveryDate.setHours(0, 0, 0, 0);
-      
       const today = new Date();
       today.setHours(0, 0, 0, 0);
-      
       if (!isNaN(deliveryDate.getTime())) {
         const diffTime = deliveryDate.getTime() - today.getTime();
         daysUntil = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
       }
     }
   }
-  
   if (!order.event_date || daysUntil === null) {
     // No delivery date or invalid date, ask for full payment
     return formatFullPaymentMessage(order, totalAmount);
   }
-  
   if (daysUntil > 3) {
     // More than 3 days away - 50% down payment
     const downPayment = Math.ceil(totalAmount * 0.5);
@@ -662,7 +555,6 @@ export function formatPaymentNotification(order, totalAmount) {
     return formatFullPaymentMessage(order, totalAmount, daysUntil);
   }
 }
-
 /**
  * Escape markdown special characters in user-provided text
  * @param {string} text - Text that may contain markdown special characters
@@ -692,7 +584,6 @@ function escapeMarkdownText(text) {
     .replace(/\{/g, '\\{')   // Escape curly braces
     .replace(/\}/g, '\\}');
 }
-
 /**
  * Format down payment message (50%)
  */
@@ -702,7 +593,6 @@ function formatDownPaymentMessage(order, totalAmount, downPayment, daysUntil) {
   const customerName = escapeMarkdownText(order.customer_name || 'N/A');
   const eventDate = escapeMarkdownText(order.event_date || '-');
   const deliveryTime = formatTime(order.delivery_time);
-  
   let message = `💰 **PEMBAYARAN DP (Down Payment)**\n\n`;
   message += `📋 **Order ID:** ${orderId}\n`;
   message += `👤 **Customer:** ${customerName}\n`;
@@ -716,10 +606,8 @@ function formatDownPaymentMessage(order, totalAmount, downPayment, daysUntil) {
   message += `• Transfer Bank\n`;
   message += `• E-Wallet (OVO, DANA, GoPay)\n\n`;
   message += `Silakan lakukan pembayaran DP untuk melanjutkan proses pesanan Anda. Terima kasih! 🙏`;
-  
   return message;
 }
-
 /**
  * Format full payment message
  */
@@ -729,25 +617,21 @@ function formatFullPaymentMessage(order, totalAmount, daysUntil = null) {
   const customerName = escapeMarkdownText(order.customer_name || 'N/A');
   const eventDate = escapeMarkdownText(order.event_date || '-');
   const deliveryTime = formatTime(order.delivery_time);
-  
   let message = `💰 **PEMBAYARAN PENUH**\n\n`;
   message += `📋 **Order ID:** ${orderId}\n`;
   message += `👤 **Customer:** ${customerName}\n`;
   message += `📅 **Tanggal Pengiriman:** ${eventDate}\n`;
   message += `Waktu Kirim: ${deliveryTime}\n\n`;
-  
   if (daysUntil !== null && daysUntil <= 3) {
     message += `Karena tanggal pengiriman ${daysUntil <= 0 ? 'sudah dekat' : `kurang dari 3 hari (${daysUntil} hari lagi)`}, mohon melakukan pembayaran penuh.\n\n`;
   } else {
     message += `Mohon melakukan pembayaran penuh untuk melanjutkan proses pesanan Anda.\n\n`;
   }
-  
   message += `💵 **Total yang harus dibayar:** Rp ${formatPrice(totalAmount)}\n\n`;
   message += `**Metode Pembayaran:**\n`;
   message += `• QRIS\n`;
   message += `• Transfer Bank\n`;
   message += `• E-Wallet (OVO, DANA, GoPay)\n\n`;
   message += `Silakan lakukan pembayaran untuk melanjutkan proses pesanan Anda. Terima kasih! 🙏`;
-  
   return message;
 }

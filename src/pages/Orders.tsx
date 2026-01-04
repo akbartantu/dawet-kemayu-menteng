@@ -31,7 +31,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-
 const statusConfig: Record<string, { label: string; variant: "success" | "info" | "warning" | "destructive" }> = {
   pending: { label: "Pending", variant: "warning" },
   pending_confirmation: { label: "Pending Confirmation", variant: "warning" },
@@ -43,7 +42,6 @@ const statusConfig: Record<string, { label: string; variant: "success" | "info" 
   cancelled: { label: "Cancelled", variant: "destructive" },
   waiting: { label: "Waiting", variant: "warning" },
 };
-
 /**
  * Valid status transitions - matches backend rules
  */
@@ -58,7 +56,6 @@ const STATUS_TRANSITIONS: Record<string, string[]> = {
   'cancelled': [], // Terminal state
   'waiting': ['pending_confirmation', 'cancelled'],
 };
-
 /**
  * Action button labels for status transitions
  * Note: 'completed' is not included as it's customer action
@@ -71,7 +68,6 @@ const STATUS_ACTION_LABELS: Record<string, string> = {
   'delivering': 'Start Delivery',
   'cancelled': 'Cancel Order',
 };
-
 export default function Orders() {
   const [searchQuery, setSearchQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<string>("all");
@@ -79,39 +75,32 @@ export default function Orders() {
   // Per-order, per-action loading state - tracks which action is being performed for each order
   // Format: { orderId: 'start_delivery' | 'cancel' | 'start_processing' | 'mark_ready' | null }
   const [loadingActionByOrderId, setLoadingActionByOrderId] = useState<Record<string, string | null>>({});
-
   // Fetch orders with filters
   const { data, isLoading, error } = useOrders({
     limit: 100,
     status: statusFilter !== "all" ? statusFilter : undefined,
     search: searchQuery || undefined,
   });
-
   const orders = data?.orders || [];
   const updateStatusMutation = useUpdateOrderStatus();
-  
   // Fetch full order details when modal is open (includes all pricing/payment fields)
   const { data: orderDetailData } = useOrder(selectedOrderId);
-  
   // Get selected order for detail view
   // Prefer detailed order data from API, fallback to list order
   const selectedOrder = selectedOrderId 
     ? (orderDetailData?.order || orders.find((o: any) => o.id === selectedOrderId))
     : null;
-
   // Format order items for display
   const formatOrderItems = (items: any[]) => {
     if (!items || items.length === 0) return "No items";
     return items.map(item => `${item.quantity}x ${item.name}`).join(", ");
   };
-
   // Calculate total from items (if not provided)
   const calculateTotal = (order: any) => {
     // For now, we'll show total_items count
     // In future, we can calculate from price list
     return order.total_items || 0;
   };
-
   // Format date
   const formatDate = (dateString: string | null) => {
     if (!dateString) return "N/A";
@@ -121,7 +110,6 @@ export default function Orders() {
       return dateString;
     }
   };
-
   // Format Indonesian Rupiah
   const formatIDR = (amount: number | null | undefined): string => {
     if (amount === null || amount === undefined || isNaN(amount)) {
@@ -134,7 +122,6 @@ export default function Orders() {
       maximumFractionDigits: 0,
     }).format(amount);
   };
-
   // Get action name from status transition
   const getActionName = (newStatus: string): string => {
     const actionMap: Record<string, string> = {
@@ -147,19 +134,15 @@ export default function Orders() {
     };
     return actionMap[newStatus] || newStatus;
   };
-
   // Handle status update with action-specific loading state
   const handleStatusUpdate = async (orderId: string, newStatus: string) => {
     const actionName = getActionName(newStatus);
-    
     // Set loading state for this specific order and action immediately
     // This ensures the spinner shows right away
     setLoadingActionByOrderId(prev => ({ ...prev, [orderId]: actionName }));
-    
     try {
       await updateStatusMutation.mutateAsync({ orderId, status: newStatus });
     } catch (error: any) {
-      console.error("Error updating status:", error);
       // Show user-friendly error message
       const errorMessage = error?.response?.data?.error || error?.message || "Failed to update order status";
       alert(errorMessage);
@@ -172,12 +155,10 @@ export default function Orders() {
       });
     }
   };
-
   // Get valid next statuses for an order
   const getValidNextStatuses = (currentStatus: string): string[] => {
     return STATUS_TRANSITIONS[currentStatus] || [];
   };
-
   return (
     <DashboardLayout
       title="Orders"
@@ -225,7 +206,6 @@ export default function Orders() {
           </Button>
         </div>
       </div>
-
       {/* Orders Table */}
       <div className="rounded-xl border border-border bg-card overflow-hidden">
         {isLoading ? (
@@ -280,7 +260,6 @@ export default function Orders() {
                 <tbody>
                   {orders.map((order: any) => {
                     const status = statusConfig[order.status] || { label: order.status, variant: "info" as const };
-
                     return (
                       <tr
                         key={order.id}
@@ -353,33 +332,25 @@ export default function Orders() {
                             <div className="flex items-center gap-1">
                               {(() => {
                                 const validNextStatuses = getValidNextStatuses(order.status);
-                                
                                 // If no valid transitions (terminal state), show current status only
                                 if (validNextStatuses.length === 0) {
                                   return (
                                     <span className="text-xs text-muted-foreground italic">
                                       {statusConfig[order.status]?.label || order.status}
                                     </span>
-                                  );
                                 }
-                                
                                 // Show action buttons for valid next statuses
                                 const rowBusy = loadingActionByOrderId[order.id] != null;
-                                
                                 return validNextStatuses.map((nextStatus) => {
                                   const isCancelled = nextStatus === 'cancelled';
                                   const actionLabel = STATUS_ACTION_LABELS[nextStatus] || 
                                     statusConfig[nextStatus]?.label || nextStatus;
-                                  
                                   // Get action name for this button
                                   const actionName = getActionName(nextStatus);
-                                  
                                   // Only show spinner if THIS specific action is loading
                                   const isThisActionLoading = loadingActionByOrderId[order.id] === actionName;
-                                  
                                   // Disable button if ANY action is running for this row
                                   const isDisabled = rowBusy;
-                                  
                                   return (
                                     <Button
                                       key={nextStatus}
@@ -398,19 +369,16 @@ export default function Orders() {
                                       )}
                                       {actionLabel}
                                     </Button>
-                                  );
                                 });
                               })()}
                             </div>
                           </div>
                         </td>
                       </tr>
-                    );
                   })}
                 </tbody>
               </table>
             </div>
-
             {/* Pagination */}
             <div className="flex items-center justify-between p-4 border-t border-border">
               <p className="text-sm text-muted-foreground">
@@ -420,7 +388,6 @@ export default function Orders() {
           </>
         )}
       </div>
-
       {/* Order Detail Dialog */}
       {selectedOrder && (
         <Dialog open={!!selectedOrderId} onOpenChange={(open) => !open && setSelectedOrderId(null)}>
@@ -458,7 +425,6 @@ export default function Orders() {
                   </div>
                 )}
               </div>
-              
               <div>
                 <p className="text-sm font-medium text-muted-foreground mb-2">Items</p>
                 <div className="space-y-2">
@@ -469,7 +435,6 @@ export default function Orders() {
                   ))}
                 </div>
               </div>
-
               {(selectedOrder.notes || []).length > 0 && (
                 <div>
                   <p className="text-sm font-medium text-muted-foreground mb-2">Notes</p>
@@ -480,7 +445,6 @@ export default function Orders() {
                   </div>
                 </div>
               )}
-
               {/* Price Breakdown Section - Always show if order has pricing data */}
               {(selectedOrder && (selectedOrder.total_amount !== undefined || selectedOrder.product_total !== undefined || selectedOrder.packaging_fee !== undefined || selectedOrder.delivery_fee !== undefined)) && (
                 <div className="pt-4 border-t">
@@ -521,7 +485,6 @@ export default function Orders() {
                   </div>
                 </div>
               )}
-
               {/* Payment Info Section - Always show if order exists */}
               {(selectedOrder && (selectedOrder.total_amount !== undefined || selectedOrder.paid_amount !== undefined || selectedOrder.payment_status !== undefined)) && (
                 <div className="pt-4 border-t">
@@ -573,7 +536,6 @@ export default function Orders() {
                   </div>
                 </div>
               )}
-
               <div className="flex items-center justify-between pt-4 border-t">
                 <div>
                   <p className="text-sm font-medium text-muted-foreground">Status</p>
@@ -591,5 +553,4 @@ export default function Orders() {
         </Dialog>
       )}
     </DashboardLayout>
-  );
 }

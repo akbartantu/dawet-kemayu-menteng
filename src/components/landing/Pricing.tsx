@@ -1,7 +1,6 @@
 import { Button } from "@/components/ui/button";
 import { CheckCircle2 } from "lucide-react";
 import { Link } from "react-router-dom";
-
 const plans = [
   {
     name: "Starter",
@@ -56,7 +55,6 @@ const plans = [
     popular: false,
   },
 ];
-
 export function Pricing() {
   return (
     <section className="py-24 bg-background">
@@ -70,7 +68,6 @@ export function Pricing() {
             free trial.
           </p>
         </div>
-
         <div className="grid md:grid-cols-3 gap-8 max-w-6xl mx-auto">
           {plans.map((plan, index) => (
             <div
@@ -86,7 +83,6 @@ export function Pricing() {
                   Most Popular
                 </div>
               )}
-
               <div className="mb-6">
                 <h3
                   className={`text-xl font-semibold mb-2 ${
@@ -105,7 +101,6 @@ export function Pricing() {
                   {plan.description}
                 </p>
               </div>
-
               <div className="mb-6">
                 <span
                   className={`text-4xl font-bold ${
@@ -124,7 +119,6 @@ export function Pricing() {
                   {plan.period}
                 </span>
               </div>
-
               <ul className="space-y-3 mb-8">
                 {plan.features.map((feature, featureIndex) => (
                   <li key={featureIndex} className="flex items-start gap-3">
@@ -145,7 +139,6 @@ export function Pricing() {
                   </li>
                 ))}
               </ul>
-
               <Link to="/dashboard">
                 <Button
                   variant={plan.popular ? "hero" : "outline"}
@@ -160,5 +153,4 @@ export function Pricing() {
         </div>
       </div>
     </section>
-  );
 }

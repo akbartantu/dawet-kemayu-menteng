@@ -2,9 +2,7 @@
  * Order Parser
  * Extracts structured order information from customer messages
  */
-
 import { normalizeDeliveryTime } from './price-calculator.js';
-
 /**
  * Extract delivery time from natural language message text
  * Handles various formats like "*Kirim dari outlet: 10.45 WIB*", "kirim pukul 10.45", etc.
@@ -15,7 +13,6 @@ export function extractDeliveryTimeFromMessage(messageText) {
   if (!messageText || typeof messageText !== 'string') {
     return null;
   }
-
   // Step 1: Pre-clean the text
   let cleaned = messageText
     .replace(/\*+/g, '') // Remove markdown asterisks
@@ -23,30 +20,22 @@ export function extractDeliveryTimeFromMessage(messageText) {
     .replace(/`+/g, '') // Remove backticks
     .replace(/\s+/g, ' ') // Normalize whitespace
     .trim();
-
   if (!cleaned) {
     return null;
   }
-
   // Step 2: Search line-by-line (more reliable)
   const lines = cleaned.split('\n').map(line => line.trim()).filter(line => line);
-  
   // Priority order for matching:
   // 1) explicit "Jam kirim:" / "Waktu kirim:"
   // 2) "Kirim dari outlet:"
   // 3) any "kirim" line containing a time
-  
   let matchedLine = null;
   let timeToken = null;
-
   for (const line of lines) {
     const lineLower = line.toLowerCase();
-    
     // Priority 1: Explicit "Jam kirim:" or "Waktu kirim:"
     if (lineLower.match(/^(jam|waktu)\s+kirim\s*:?\s*/i)) {
       matchedLine = line;
-      console.log(`🔍 [PARSE] Found explicit delivery time line: "${line}"`);
-      
       // Extract time token after the keyword
       const timeMatch = line.match(/(?:jam|waktu)\s+kirim\s*:?\s*(.+)/i);
       if (timeMatch && timeMatch[1]) {
@@ -57,8 +46,6 @@ export function extractDeliveryTimeFromMessage(messageText) {
     // Priority 2: "Kirim dari outlet:"
     else if (lineLower.match(/kirim\s+dari\s+outlet\s*:?\s*/i) && !matchedLine) {
       matchedLine = line;
-      console.log(`🔍 [PARSE] Found "Kirim dari outlet" line: "${line}"`);
-      
       // Extract time token after "Kirim dari outlet:"
       const timeMatch = line.match(/kirim\s+dari\s+outlet\s*:?\s*(.+)/i);
       if (timeMatch && timeMatch[1]) {
@@ -72,8 +59,6 @@ export function extractDeliveryTimeFromMessage(messageText) {
       const hasTimePattern = /(\d{1,2}[.:]\d{1,2}|\d{1,2}(?:\s*(?:wib|wita|wit|jam|pukul))?)/i.test(line);
       if (hasTimePattern) {
         matchedLine = line;
-        console.log(`🔍 [PARSE] Found "kirim" line with time pattern: "${line}"`);
-        
         // Extract time token - look for time pattern after "kirim"
         const timeMatch = line.match(/kirim(?:\s+(?:dari|pukul|jam))?\s*:?\s*(.+)/i);
         if (timeMatch && timeMatch[1]) {
@@ -88,22 +73,18 @@ export function extractDeliveryTimeFromMessage(messageText) {
       }
     }
   }
-
   // If no match found, try searching entire message for time patterns
   if (!timeToken) {
     // Look for time patterns anywhere in the message
     const globalTimeMatch = cleaned.match(/(\d{1,2}[.:]\d{1,2}|\d{1,2})/);
     if (globalTimeMatch) {
-      console.log(`🔍 [PARSE] Found time pattern in message (no keyword match): "${globalTimeMatch[1]}"`);
+      : "${globalTimeMatch[1]}"`);
       timeToken = globalTimeMatch[1];
     }
   }
-
   if (!timeToken) {
-    console.log(`⚠️ [PARSE] delivery_time not found in message`);
     return null;
   }
-
   // Step 3: Clean the time token
   // Remove timezone suffixes, "jam", "pukul", etc.
   let cleanedToken = timeToken
@@ -111,25 +92,17 @@ export function extractDeliveryTimeFromMessage(messageText) {
     .replace(/^(jam|pukul)\s+/i, '') // Remove "jam" or "pukul" at start
     .replace(/\s*(jam|pukul)\s*$/i, '') // Remove "jam" or "pukul" at end
     .trim();
-
   if (!cleanedToken) {
-    console.log(`⚠️ [PARSE] Time token became empty after cleaning: "${timeToken}"`);
     return null;
   }
-
-  console.log(`🔍 [PARSE] Extracted time token: "${cleanedToken}"`);
-
   // Step 4: Normalize using normalizeDeliveryTime()
   try {
     const normalized = normalizeDeliveryTime(cleanedToken);
-    console.log(`✅ [PARSE] Normalized delivery_time: "${normalized}"`);
     return normalized;
   } catch (error) {
-    console.warn(`⚠️ [PARSE] Failed to normalize delivery_time "${cleanedToken}":`, error.message);
     return null;
   }
 }
-
 /**
  * Parse order information from message text
  * Expected format:
@@ -151,16 +124,12 @@ export function parseOrderFromMessage(messageText) {
     items: [],
     notes: [],
   };
-
   const lines = messageText.split('\n').map(line => line.trim()).filter(line => line);
-
   let currentSection = null;
   let addressLines = [];
   let orderDetailsStarted = false;
-
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
-
     // Parse customer name - handles both "Nama:" and "Nama Pemesan:" formats
     // Must not be "Nama event" or "Nama Penerima"
     if (line.match(/^Nama\s+Pemesan\s*:?\s*(.+)$/i)) {
@@ -182,7 +151,6 @@ export function parseOrderFromMessage(messageText) {
         continue;
       }
     }
-
     // Parse receiver name (Nama Penerima) - optional, falls back to customer_name
     if (line.match(/^Nama\s+Penerima\s*:?\s*(.+)$/i)) {
       const name = line.replace(/^Nama\s+Penerima\s*:?\s*/i, '').trim();
@@ -191,7 +159,6 @@ export function parseOrderFromMessage(messageText) {
         continue;
       }
     }
-
     // Parse phone number - handles both "No hp:" and "No HP Penerima:" formats
     if (line.match(/^No\s+HP\s+Penerima\s*:?\s*(.+)$/i)) {
       order.phone_number = line.replace(/^No\s+HP\s+Penerima\s*:?\s*/i, '').trim();
@@ -201,7 +168,6 @@ export function parseOrderFromMessage(messageText) {
       order.phone_number = line.replace(/^No\s+hp\s*:?\s*/i, '').trim();
       continue;
     }
-
     // Parse address - handles both "Alamat:" and "Alamat Penerima:" formats
     if (line.match(/^Alamat\s+Penerima\s*:?\s*(.+)$/i)) {
       const addressText = line.replace(/^Alamat\s+Penerima\s*:?\s*/i, '').trim();
@@ -229,7 +195,6 @@ export function parseOrderFromMessage(messageText) {
         continue;
       }
     }
-
     // Continue collecting address lines
     if (currentSection === 'address') {
       // Check if next section starts (Titik, Nama event, Waktu Kirim, etc.)
@@ -260,7 +225,6 @@ export function parseOrderFromMessage(messageText) {
       }
       continue;
     }
-
     // Parse event name
     if (line.match(/^Nama event\s*\(jika untuk event\)\s*:?\s*(.+)$/i)) {
       const eventName = line.replace(/^Nama event\s*\(jika untuk event\)\s*:?\s*/i, '').trim();
@@ -269,7 +233,6 @@ export function parseOrderFromMessage(messageText) {
       }
       continue;
     }
-
     // Parse event duration
     if (line.match(/^Durasi event\s*:?\s*(.+)$/i)) {
       const duration = line.replace(/^Durasi event\s*:?\s*/i, '').trim();
@@ -278,13 +241,11 @@ export function parseOrderFromMessage(messageText) {
       }
       continue;
     }
-
     // Parse event date
     if (line.match(/^Tanggal\s*:?\s*(.+)$/i)) {
       order.event_date = line.replace(/^Tanggal\s*:?\s*/i, '').trim();
       continue;
     }
-
     // Parse delivery time - handles multiple formats
     // "Waktu Kirim (jam): HH:MM" or "Waktu Kirim: HH:MM"
     if (line.match(/^Waktu\s+Kirim\s*\(jam\)\s*:?\s*(.+)$/i)) {
@@ -335,29 +296,24 @@ export function parseOrderFromMessage(messageText) {
       }
       continue;
     }
-
     // Parse order details
     if (line.match(/^Detail pesanan\s*:?\s*$/i)) {
       orderDetailsStarted = true;
       continue;
     }
-
     // Parse order items and notes
     if (orderDetailsStarted) {
       // Clean line first - remove zero-width spaces and other invisible characters
       const cleanLine = line.replace(/[⁠\u200B-\u200D\uFEFF]/g, '').trim();
-      
       // Skip empty lines
       if (!cleanLine) {
         continue;
       }
-      
       // Check if we've reached the Notes section
       if (cleanLine.match(/^Notes?\s*:?\s*$/i)) {
         // Notes section started, continue to next line
         continue;
       }
-      
       // Match item format with "x": "- 20 x Dawet Medium + Nangka" or "20 x Dawet Medium"
       // Pattern: optional "-" or "•", optional spaces, number, spaces, "x", spaces, item name
       const itemMatchWithX = cleanLine.match(/^[-•]?\s*(\d+)\s+x\s+(.+)$/i);
@@ -372,7 +328,6 @@ export function parseOrderFromMessage(messageText) {
         }
         continue;
       }
-      
       // Match item format without "x": "20 dawet medium ori" or "15 dawet medium topping durian"
       // Pattern: starts with number, then item name (no "x")
       const itemMatchNoX = cleanLine.match(/^[-•]?\s*(\d+)\s+([a-zA-Z].+)$/i);
@@ -381,7 +336,6 @@ export function parseOrderFromMessage(messageText) {
         const itemName = itemMatchNoX[2].trim();
         // Normalize item name
         let normalizedName = itemName;
-        
         // Handle common variations
         if (itemName.match(/dawet\s+medium\s+ori/i)) {
           normalizedName = 'Dawet Medium Original';
@@ -392,7 +346,6 @@ export function parseOrderFromMessage(messageText) {
         } else if (itemName.match(/dawet\s+medium/i)) {
           normalizedName = itemName.replace(/dawet\s+medium/i, 'Dawet Medium');
         }
-        
         if (normalizedName && normalizedName.length > 0) {
           order.items.push({
             quantity: quantity,
@@ -401,7 +354,6 @@ export function parseOrderFromMessage(messageText) {
         }
         continue;
       }
-
       // Match notes/instructions: "- Packaging styrofoam" or "Packaging Styrofoam" (no quantity)
       // Notes are lines that don't start with a number
       if (cleanLine.match(/^[-•]?\s*(.+)$/i)) {
@@ -414,19 +366,15 @@ export function parseOrderFromMessage(messageText) {
       }
     }
   }
-
   // Finalize address if still collecting
   if (currentSection === 'address' && addressLines.length > 0) {
     order.address = addressLines.join(', ').trim();
   }
-
   // Fallback: If delivery_time is still empty, try extracting from natural language
   if (!order.delivery_time || order.delivery_time.trim() === '') {
-    console.log(`🔍 [PARSE] delivery_time not found in standard format, trying natural language extraction...`);
     const extractedTime = extractDeliveryTimeFromMessage(messageText);
     if (extractedTime) {
       order.delivery_time = extractedTime;
-      console.log(`✅ [PARSE] Extracted delivery_time from natural language: "${extractedTime}"`);
     }
   } else {
     // Normalize existing delivery_time to ensure HH:MM format
@@ -434,50 +382,39 @@ export function parseOrderFromMessage(messageText) {
       const originalTime = order.delivery_time;
       order.delivery_time = normalizeDeliveryTime(order.delivery_time);
       if (order.delivery_time !== originalTime) {
-        console.log(`🔍 [PARSE] Normalized delivery_time: "${originalTime}" → "${order.delivery_time}"`);
       }
     } catch (error) {
-      console.warn(`⚠️ [PARSE] Failed to normalize existing delivery_time "${order.delivery_time}":`, error.message);
       // Try natural language extraction as fallback
       const extractedTime = extractDeliveryTimeFromMessage(messageText);
       if (extractedTime) {
         order.delivery_time = extractedTime;
-        console.log(`✅ [PARSE] Used natural language extraction as fallback: "${extractedTime}"`);
       }
     }
   }
-
   return order;
 }
-
 /**
  * Validate parsed order
  */
 export function validateOrder(order) {
   const errors = [];
-
   if (!order.customer_name) {
     errors.push('Customer name is required');
   }
-
   if (!order.phone_number) {
     errors.push('Phone number is required');
   }
-
   if (!order.address) {
     errors.push('Address is required');
   }
-
   if (order.items.length === 0) {
     errors.push('At least one order item is required');
   }
-
   return {
     valid: errors.length === 0,
     errors: errors,
   };
 }
-
 /**
  * Format order as readable text
  */
@@ -486,7 +423,6 @@ export function formatOrderSummary(order) {
   summary += `👤 **Customer:** ${order.customer_name || 'N/A'}\n`;
   summary += `📞 **Phone:** ${order.phone_number || 'N/A'}\n`;
   summary += `📍 **Address:** ${order.address || 'N/A'}\n\n`;
-
   if (order.event_name) {
     summary += `🎉 **Event:** ${order.event_name}\n`;
   }
@@ -499,14 +435,11 @@ export function formatOrderSummary(order) {
   if (order.delivery_time) {
     summary += `🕐 **Delivery Time:** ${order.delivery_time}\n`;
   }
-
   if (order.items.length > 0) {
     summary += `\n📦 **Items:**\n`;
-    
     // Calculate total cups and required styrofoam boxes
     let totalCups = 0;
     let hasPackagingRequest = false;
-    
     // Check notes for packaging request (e.g., "Packaging Styrofoam: YA")
     if (order.notes && order.notes.length > 0) {
       for (const note of order.notes) {
@@ -519,17 +452,14 @@ export function formatOrderSummary(order) {
         }
       }
     }
-    
     // Count cups and check items for packaging
     order.items.forEach(item => {
       const itemName = (item.name || '').toLowerCase();
-      
       // Check if packaging is requested in items
       if (itemName.includes('packaging') || itemName.includes('styrofoam')) {
         hasPackagingRequest = true;
         return; // Skip packaging items in cup count
       }
-      
       // Count cups from cup-based products (Dawet Small/Medium/Large)
       if (itemName.includes('dawet') && 
           (itemName.includes('small') || 
@@ -541,15 +471,12 @@ export function formatOrderSummary(order) {
         }
       }
     });
-    
     // Calculate required styrofoam boxes (1 box per 50 cups, rounded up)
     const requiredStyrofoamBoxes = hasPackagingRequest && totalCups > 0 ? Math.ceil(totalCups / 50) : 0;
     let packagingShown = false;
-    
     // Display items, replacing packaging with calculated quantity
     order.items.forEach(item => {
       const itemName = (item.name || '').toLowerCase();
-      
       // If this is a packaging item, show calculated quantity
       if (itemName.includes('packaging') || itemName.includes('styrofoam')) {
         if (requiredStyrofoamBoxes > 0) {
@@ -559,11 +486,9 @@ export function formatOrderSummary(order) {
         // Skip the original packaging item (we've replaced it with calculated value)
         return;
       }
-      
       // Display other items normally
       summary += `• ${item.quantity}x ${item.name}\n`;
     });
-    
     // If packaging was requested (via notes) but not in items, add it
     if (hasPackagingRequest && !packagingShown) {
       if (requiredStyrofoamBoxes > 0) {
@@ -574,13 +499,11 @@ export function formatOrderSummary(order) {
       }
     }
   }
-
   if (order.notes.length > 0) {
     summary += `\n📝 **Notes:**\n`;
     order.notes.forEach(note => {
       summary += `• ${note}\n`;
     });
   }
-
   return summary;
 }

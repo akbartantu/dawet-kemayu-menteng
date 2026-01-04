@@ -3,15 +3,11 @@
  * Shows menu items to customers when they ask for menu
  * Uses new PriceList schema: item_code, item_name, category, unit_price, unit_type, is_active
  */
-
 import { google } from 'googleapis';
 import dotenv from 'dotenv';
-
 dotenv.config();
-
 const SPREADSHEET_ID = process.env.GOOGLE_SPREADSHEET_ID;
 const PRICE_LIST_SHEET = 'PriceList';
-
 // Initialize Google Sheets API
 let auth;
 if (process.env.GOOGLE_SERVICE_ACCOUNT_KEY) {
@@ -28,9 +24,7 @@ if (process.env.GOOGLE_SERVICE_ACCOUNT_KEY) {
 } else {
   throw new Error('Either GOOGLE_SERVICE_ACCOUNT_KEY or GOOGLE_SERVICE_ACCOUNT_KEY_FILE must be set');
 }
-
 const sheets = google.sheets({ version: 'v4', auth });
-
 /**
  * Format menu display message
  * Reads from new PriceList schema and displays only item_name (no duplicates)
@@ -42,28 +36,23 @@ export async function formatMenuMessage() {
       spreadsheetId: SPREADSHEET_ID,
       range: `${PRICE_LIST_SHEET}!A:F`,
     });
-
     const rows = response.data.values || [];
     if (rows.length <= 1) {
       return `📋 MENU DAWET KEMAYU MENTENG\n\nMenu sedang dalam proses update. Silakan hubungi admin.\n\n💡 Cara Pesan\nKirim pesanan dengan format:\nNama: [Nama Anda]\nNo hp: [Nomor HP]\nAlamat: [Alamat]\nDetail pesanan:\n- [Jumlah] x [Nama Item]\n\nKetik /help untuk contoh lengkap`;
     }
-
     // Detect schema by checking header row
     const headerRow = rows[0] || [];
     const hasNewSchema = headerRow[0]?.toLowerCase().includes('item_code') || 
                          headerRow[3]?.toLowerCase().includes('unit_price');
-    
     if (!hasNewSchema) {
       // Fallback to old schema (2 columns)
       const { getPriceList } = await import('./google-sheets.js');
       const priceList = await getPriceList();
       return formatMenuFromPriceList(priceList);
     }
-
     // Parse new schema: A=item_code, B=item_name, C=category, D=unit_price, E=unit_type, F=is_active
     const menuItems = [];
     const seenItemNames = new Set(); // Track unique item names to prevent duplicates
-    
     for (let i = 1; i < rows.length; i++) {
       const row = rows[i] || [];
       const itemCode = row[0]?.trim();
@@ -71,31 +60,26 @@ export async function formatMenuMessage() {
       const category = row[2]?.trim().toLowerCase();
       const unitPriceRaw = row[3]?.toString().trim();
       const isActive = row[5]?.toString().toUpperCase().trim();
-      
       // Skip if missing required fields
       if (!itemName || !unitPriceRaw) {
         continue;
       }
-      
       // Only include active items
       if (isActive && isActive !== 'TRUE' && isActive !== '1') {
         continue;
       }
-      
       // Parse price
       const price = parseInt(unitPriceRaw.replace(/[.,]/g, '')) || 0;
       if (price <= 0) {
         continue;
       }
-      
       // CRITICAL: Use item_name as unique key to prevent duplicates
       // If we've already seen this item_name, skip it (prevent duplicates)
       if (seenItemNames.has(itemName)) {
-        console.warn(`⚠️ [MENU] Duplicate item_name skipped: "${itemName}" (item_code: "${itemCode}")`);
+        `);
         continue;
       }
       seenItemNames.add(itemName);
-      
       // Use item_name only (not item_code) to avoid duplicates
       menuItems.push({
         itemName: itemName,
@@ -103,9 +87,7 @@ export async function formatMenuMessage() {
         price: price,
       });
     }
-    
-    console.log(`✅ [MENU] Loaded ${menuItems.length} unique items from PriceList (${seenItemNames.size} unique item names)`);
-    
+    `);
     // Group by category with proper mapping
     const categoryGroups = {
       'Dawet': [],
@@ -115,11 +97,9 @@ export async function formatMenuMessage() {
       'Minuman': [],
       'Snack': [],
     };
-    
     for (const item of menuItems) {
       const categoryLower = item.category.toLowerCase();
       const itemNameLower = item.itemName.toLowerCase();
-      
       // Map PriceList category to menu section
       if (categoryLower === 'minuman') {
         // Check if it's a Dawet item or other beverage
@@ -156,13 +136,10 @@ export async function formatMenuMessage() {
         }
       }
     }
-    
     // Build menu message (NO markdown asterisks)
     let menu = `📋 MENU DAWET KEMAYU MENTENG\n\n`;
-    
     // Define category order
     const categoryOrder = ['Dawet', 'Topping', 'Botol', 'Pack', 'Minuman', 'Snack'];
-    
     for (const category of categoryOrder) {
       const items = categoryGroups[category];
       if (items.length > 0) {
@@ -173,7 +150,6 @@ export async function formatMenuMessage() {
           }
           return a.itemName.localeCompare(b.itemName);
         });
-        
         menu += `${category}\n`;
         items.forEach(item => {
           menu += `• ${item.itemName} — Rp ${formatIDR(item.price)}\n`;
@@ -181,7 +157,6 @@ export async function formatMenuMessage() {
         menu += `\n`;
       }
     }
-    
     menu += `💡 Cara Pesan\n`;
     menu += `Kirim pesanan dengan format:\n`;
     menu += `Nama: [Nama Anda]\n`;
@@ -190,22 +165,17 @@ export async function formatMenuMessage() {
     menu += `Detail pesanan:\n`;
     menu += `- [Jumlah] x [Nama Item]\n\n`;
     menu += `Ketik /help untuk contoh lengkap`;
-    
     return menu;
   } catch (error) {
-    console.error('❌ Error generating menu:', error.message);
-    console.error('❌ Stack:', error.stack);
     // Fallback to simple message
     return `📋 MENU DAWET KEMAYU MENTENG\n\nMenu sedang dalam proses update. Silakan hubungi admin.\n\n💡 Cara Pesan\nKirim pesanan dengan format:\nNama: [Nama Anda]\nNo hp: [Nomor HP]\nAlamat: [Alamat]\nDetail pesanan:\n- [Jumlah] x [Nama Item]\n\nKetik /help untuk contoh lengkap`;
   }
 }
-
 /**
  * Fallback: Format menu from old price list format (2 columns)
  */
 function formatMenuFromPriceList(priceList) {
   let menu = `📋 MENU DAWET KEMAYU MENTENG\n\n`;
-  
   // Group items by category
   const categories = {
     'Dawet': [],
@@ -215,10 +185,8 @@ function formatMenuFromPriceList(priceList) {
     'Minuman': [],
     'Snack': [],
   };
-  
   // Use a Set to track item names we've already added (avoid duplicates)
   const seenItems = new Set();
-  
   // Categorize items (only add item_name, skip item_code)
   for (const [itemKey, price] of Object.entries(priceList)) {
     // CRITICAL: Skip if it's a snake_case code (item_code) - these are aliases, not display names
@@ -227,20 +195,15 @@ function formatMenuFromPriceList(priceList) {
                        !itemKey.includes(' ') && 
                        itemKey === itemKey.toLowerCase() &&
                        !itemKey.match(/[A-Z]/); // No uppercase letters
-    
     if (isItemCode) {
       continue; // Skip item_code entries (aliases)
     }
-    
     // Only process if we haven't seen this item name before (prevent duplicates)
     if (seenItems.has(itemKey)) {
-      console.warn(`⚠️ [MENU_FALLBACK] Duplicate item skipped: "${itemKey}"`);
       continue;
     }
     seenItems.add(itemKey);
-    
     const nameLower = itemKey.toLowerCase();
-    
     if (nameLower.includes('dawet') && !nameLower.includes('botol')) {
       categories['Dawet'].push({ name: itemKey, price });
     } else if (nameLower.includes('topping')) {
@@ -255,7 +218,6 @@ function formatMenuFromPriceList(priceList) {
       categories['Snack'].push({ name: itemKey, price });
     }
   }
-  
   // Format each category (NO markdown asterisks)
   for (const [category, items] of Object.entries(categories)) {
     if (items.length > 0) {
@@ -266,7 +228,6 @@ function formatMenuFromPriceList(priceList) {
         }
         return a.name.localeCompare(b.name);
       });
-      
       menu += `${category}\n`;
       items.forEach(item => {
         menu += `• ${item.name} — Rp ${formatIDR(item.price)}\n`;
@@ -274,7 +235,6 @@ function formatMenuFromPriceList(priceList) {
       menu += `\n`;
     }
   }
-  
   menu += `💡 Cara Pesan\n`;
   menu += `Kirim pesanan dengan format:\n`;
   menu += `Nama: [Nama Anda]\n`;
@@ -283,10 +243,8 @@ function formatMenuFromPriceList(priceList) {
   menu += `Detail pesanan:\n`;
   menu += `- [Jumlah] x [Nama Item]\n\n`;
   menu += `Ketik /help untuk contoh lengkap`;
-  
   return menu;
 }
-
 /**
  * Format price as Indonesian Rupiah with thousand separators
  * @param {number} price - Price in IDR
@@ -298,7 +256,6 @@ function formatIDR(price) {
   }
   return price.toString().replace(/\B(?=(\d{3})+(?!\d))/g, '.');
 }
-
 /**
  * Check if message is asking for menu
  */
@@ -307,19 +264,15 @@ export function isMenuRequest(text) {
     'menu', 'daftar', 'list', 'harga', 'price', 'apa saja',
     'ada apa', 'tersedia', 'jual', 'jualan'
   ];
-  
   const textLower = text.toLowerCase();
   return menuKeywords.some(keyword => textLower.includes(keyword));
 }
-
 /**
  * Check if message is a FAQ question
  */
 export function isFAQQuestion(text) {
   if (!text) return false;
-  
   const textLower = text.toLowerCase().trim();
-  
   // Check if this looks like an order format (contains order field labels)
   // If it does, it's NOT an FAQ question
   const orderFormatKeywords = [
@@ -328,12 +281,10 @@ export function isFAQQuestion(text) {
     'detail pesanan', 'packaging styrofoam', 'metode pengiriman',
     'biaya pengiriman', 'notes:', 'notes :'
   ];
-  
   const isOrderFormat = orderFormatKeywords.some(keyword => textLower.includes(keyword));
   if (isOrderFormat) {
     return false; // This is an order, not an FAQ
   }
-  
   // Check for explicit FAQ keywords (but not in order context)
   const faqKeywords = [
     'jam buka', 'jam tutup', 'buka jam', 'tutup jam',
@@ -341,7 +292,6 @@ export function isFAQQuestion(text) {
     'bayar', 'pembayaran', 'payment', 'transfer',
     'bisa', 'boleh', 'apakah'
   ];
-  
   // Location keywords - only match explicit commands
   const isLocationCommand = (
     textLower === '/lokasi' ||
@@ -350,12 +300,9 @@ export function isFAQQuestion(text) {
     textLower === 'location' ||
     (textLower.startsWith('/lokasi') && textLower.length <= 10) ||
     (textLower.startsWith('/location') && textLower.length <= 12)
-  );
-  
   if (isLocationCommand) {
     return true; // Explicit location command
   }
-  
   // Don't match "alamat" or "dimana" if it's part of order format
   // Only match standalone location questions
   const isLocationQuestion = (
@@ -363,24 +310,19 @@ export function isFAQQuestion(text) {
     !textLower.includes('alamat penerima') &&
     !textLower.includes('alamat:') &&
     textLower.length < 100 // Short questions only, not order forms
-  );
-  
   return faqKeywords.some(keyword => textLower.includes(keyword)) || isLocationQuestion;
 }
-
 /**
  * Get FAQ answer
  */
 export function getFAQAnswer(text) {
   const textLower = text.toLowerCase();
-  
   // Opening hours
   if (textLower.includes('jam buka') || textLower.includes('buka jam') || textLower.includes('jam tutup')) {
     return `🕐 **Jam Operasional:**\n\n` +
            `Senin - Minggu: 08:00 - 20:00 WIB\n\n` +
            `Kami siap melayani pesanan Anda setiap hari!`;
   }
-  
   // Location (ONLY for explicit commands, not order messages)
   // Check if it's an explicit location command, not part of order format
   const isExplicitLocationCommand = (
@@ -390,8 +332,6 @@ export function getFAQAnswer(text) {
     textLower.trim() === 'location' ||
     (textLower.startsWith('/lokasi') && textLower.length <= 10) ||
     (textLower.startsWith('/location') && textLower.length <= 12)
-  );
-  
   // Only send location if it's an explicit command, not if "alamat" appears in order format
   if (isExplicitLocationCommand) {
     return `📍 **Lokasi:**\n\n` +
@@ -399,7 +339,6 @@ export function getFAQAnswer(text) {
            `Jl. Kemayu Menteng, Jakarta\n\n` +
            `Untuk informasi lebih detail, silakan hubungi kami!`;
   }
-  
   // Delivery
   if (textLower.includes('ongkir') || textLower.includes('ongkos kirim') || textLower.includes('delivery') || textLower.includes('pengiriman')) {
     return `🚚 **Pengiriman:**\n\n` +
@@ -407,7 +346,6 @@ export function getFAQAnswer(text) {
            `Ongkir tergantung jarak dan akan diinformasikan saat konfirmasi pesanan.\n\n` +
            `Minimum order: Rp 50.000`;
   }
-  
   // Payment
   if (textLower.includes('bayar') || textLower.includes('pembayaran') || textLower.includes('payment') || textLower.includes('transfer')) {
     return `💳 **Metode Pembayaran:**\n\n` +
@@ -416,7 +354,6 @@ export function getFAQAnswer(text) {
            `• E-Wallet (OVO, DANA, GoPay)\n\n` +
            `Pembayaran dilakukan setelah konfirmasi pesanan.`;
   }
-  
   // General FAQ
   return `❓ **Pertanyaan Umum:**\n\n` +
          `• Jam buka: 08:00 - 20:00 WIB\n` +

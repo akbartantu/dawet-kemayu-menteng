@@ -7,33 +7,25 @@
  * 
  * If sheetName is not provided, checks both Orders and WaitingList
  */
-
 import { detectDuplicateOrders } from './google-sheets.js';
-
 const sheetName = process.argv[2] || null;
-
 if (sheetName) {
-  console.log(`\n🔍 Detecting duplicate orders in sheet: ${sheetName}\n`);
   detectDuplicateOrders(sheetName)
     .then((duplicates) => {
       if (duplicates.length === 0) {
-        console.log('\n✅ No duplicates found!');
         process.exit(0);
       } else {
-        console.log(`\n❌ Found ${duplicates.length} duplicate order(s):`);
+        :`);
         duplicates.forEach(dup => {
-          console.log(`   Order ${dup.orderId}: ${dup.count} occurrences at rows ${dup.rows.join(', ')}`);
+          }`);
         });
-        console.log('\n⚠️ Manual cleanup required: Delete duplicate rows from Google Sheets');
         process.exit(1);
       }
     })
     .catch((error) => {
-      console.error('\n❌ Detection failed:', error.message);
       process.exit(1);
     });
 } else {
-  console.log('\n🔍 Detecting duplicate orders in all sheets\n');
   Promise.all([
     detectDuplicateOrders('Orders'),
     detectDuplicateOrders('WaitingList'),
@@ -41,28 +33,25 @@ if (sheetName) {
     .then(([ordersDups, waitingListDups]) => {
       const totalDups = ordersDups.length + waitingListDups.length;
       if (totalDups === 0) {
-        console.log('\n✅ No duplicates found in any sheet!');
         process.exit(0);
       } else {
-        console.log(`\n❌ Found ${totalDups} duplicate order(s) total:`);
+        total:`);
         if (ordersDups.length > 0) {
-          console.log(`\n   Orders sheet: ${ordersDups.length} duplicate(s)`);
+          `);
           ordersDups.forEach(dup => {
-            console.log(`     Order ${dup.orderId}: ${dup.count} occurrences at rows ${dup.rows.join(', ')}`);
+            }`);
           });
         }
         if (waitingListDups.length > 0) {
-          console.log(`\n   WaitingList sheet: ${waitingListDups.length} duplicate(s)`);
+          `);
           waitingListDups.forEach(dup => {
-            console.log(`     Order ${dup.orderId}: ${dup.count} occurrences at rows ${dup.rows.join(', ')}`);
+            }`);
           });
         }
-        console.log('\n⚠️ Manual cleanup required: Delete duplicate rows from Google Sheets');
         process.exit(1);
       }
     })
     .catch((error) => {
-      console.error('\n❌ Detection failed:', error.message);
       process.exit(1);
     });
 }

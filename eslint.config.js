@@ -3,7 +3,6 @@ import globals from "globals";
 import reactHooks from "eslint-plugin-react-hooks";
 import reactRefresh from "eslint-plugin-react-refresh";
 import tseslint from "typescript-eslint";
-
 export default tseslint.config(
   { ignores: ["dist"] },
   {
@@ -23,4 +22,3 @@ export default tseslint.config(
       "@typescript-eslint/no-unused-vars": "off",
     },
   },
-);

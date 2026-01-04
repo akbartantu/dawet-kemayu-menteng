@@ -3,9 +3,7 @@
  * Handles payment status tracking and updates for orders
  * Implements PRD payment workflow: UNPAID → DP PAID → FULL PAID
  */
-
 // Payment tracking functions will be added to google-sheets.js
-
 /**
  * Calculate payment status based on paid amount and total
  * @param {number} paidAmount - Amount paid so far
@@ -16,9 +14,7 @@ export function calculatePaymentStatus(paidAmount, finalTotal) {
   if (!finalTotal || finalTotal === 0) {
     return 'UNPAID';
   }
-
   const percentage = (paidAmount / finalTotal) * 100;
-
   if (percentage >= 100) {
     return 'FULL PAID';
   } else if (percentage >= 50) {
@@ -27,7 +23,6 @@ export function calculatePaymentStatus(paidAmount, finalTotal) {
     return 'UNPAID';
   }
 }
-
 /**
  * Calculate remaining balance
  * @param {number} finalTotal - Final total amount
@@ -38,7 +33,6 @@ export function calculateRemainingBalance(finalTotal, paidAmount) {
   const remaining = finalTotal - paidAmount;
   return Math.max(0, remaining);
 }
-
 /**
  * Calculate minimum DP amount (50% of total)
  * @param {number} finalTotal - Final total amount
@@ -47,7 +41,6 @@ export function calculateRemainingBalance(finalTotal, paidAmount) {
 export function calculateMinDP(finalTotal) {
   return Math.ceil(finalTotal * 0.5);
 }
-
 /**
  * Format payment status message for bot response
  * @param {Object} order - Order object with payment info
@@ -82,7 +75,6 @@ function escapeMarkdownText(text) {
     .replace(/\{/g, '\\{')   // Escape curly braces
     .replace(/\}/g, '\\}');
 }
-
 export function formatPaymentStatusMessage(order) {
   // Escape user-provided data to prevent markdown parsing errors
   const orderId = escapeMarkdownText(order.id || 'N/A');
@@ -92,13 +84,11 @@ export function formatPaymentStatusMessage(order) {
   const paymentStatus = order.payment_status || 'UNPAID';
   const remainingBalance = calculateRemainingBalance(totalAmount, paidAmount);
   const minDP = calculateMinDP(totalAmount);
-
   let message = `💰 **STATUS PEMBAYARAN**\n\n`;
   message += `📋 Order ID: ${orderId}\n`;
   message += `💵 Total: Rp ${formatRupiah(totalAmount)}\n`;
   message += `💳 Total Dibayar: Rp ${formatRupiah(paidAmount)}\n`;
   message += `📊 Sisa: Rp ${formatRupiah(remainingBalance)}\n\n`;
-
   if (paymentStatus === 'FULL PAID') {
     message += `✅ **Status: LUNAS**\n`;
     message += `Terima kasih! Pembayaran sudah lengkap.`;
@@ -116,10 +106,8 @@ export function formatPaymentStatusMessage(order) {
     }
     message += `Sisa pembayaran: Rp ${formatRupiah(remainingBalance)}`;
   }
-
   return message;
 }
-
 /**
  * Parse Indonesian Rupiah amount from string input
  * Handles formats: "235.000", "235,000", "Rp 235.000", "235000", etc.
@@ -130,27 +118,20 @@ export function parseIDRAmount(input) {
   if (!input || typeof input !== 'string') {
     return null;
   }
-  
   // Remove "Rp" or "rp" prefix (case-insensitive)
   let cleaned = input.trim().replace(/^rp\s*/i, '');
-  
   // Remove all spaces
   cleaned = cleaned.replace(/\s+/g, '');
-  
   // Remove thousand separators (both . and ,)
   cleaned = cleaned.replace(/[.,]/g, '');
-  
   // Parse as integer (IDR has no decimals)
   const amount = parseInt(cleaned, 10);
-  
   // Validate: must be a valid number, positive, and not NaN
   if (isNaN(amount) || amount <= 0) {
     return null;
   }
-  
   return amount;
 }
-
 /**
  * Format Rupiah currency
  * @param {number} amount - Amount to format
@@ -159,7 +140,6 @@ export function parseIDRAmount(input) {
 function formatRupiah(amount) {
   return new Intl.NumberFormat('id-ID').format(amount);
 }
-
 /**
  * Validate payment update
  * @param {string} currentStatus - Current payment status
@@ -171,25 +151,21 @@ export function validatePaymentStatusTransition(currentStatus, newStatus) {
   if (currentStatus === newStatus) {
     return { valid: true };
   }
-
   // No backward transitions allowed
   const statusOrder = ['UNPAID', 'DP PAID', 'FULL PAID'];
   const currentIndex = statusOrder.indexOf(currentStatus);
   const newIndex = statusOrder.indexOf(newStatus);
-
   if (currentIndex === -1 || newIndex === -1) {
     return { 
       valid: false, 
       error: `Invalid payment status: ${currentStatus} → ${newStatus}` 
     };
   }
-
   if (newIndex < currentIndex) {
     return { 
       valid: false, 
       error: `Cannot regress payment status from ${currentStatus} to ${newStatus}. Payment status can only progress forward.` 
     };
   }
-
   return { valid: true };
 }

@@ -10,7 +10,6 @@
  * WARNING: This will modify your Google Sheets. Make a backup first!
  * This script is safe and idempotent - it only updates rows that need normalization.
  */
-
 /**
  * Migration Script: Normalize event_date and delivery_time formats in Google Sheets
  * 
@@ -23,16 +22,12 @@
  * WARNING: This will modify your Google Sheets. Make a backup first!
  * This script is safe and idempotent - it only updates rows that need normalization.
  */
-
 import { migrateAllSheetsDateAndTime } from './google-sheets.js';
-
 // Run migration
 migrateAllSheetsDateAndTime()
   .then(() => {
-    console.log('\n✅ Migration script completed successfully!');
     process.exit(0);
   })
   .catch((error) => {
-    console.error('\n❌ Migration script failed:', error);
     process.exit(1);
   });

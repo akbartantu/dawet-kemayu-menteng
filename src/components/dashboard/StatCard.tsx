@@ -1,7 +1,6 @@
 import { ReactNode } from "react";
 import { cn } from "@/lib/utils";
 import { TrendingUp, TrendingDown } from "lucide-react";
-
 interface StatCardProps {
   title: string;
   value: string | number;
@@ -10,7 +9,6 @@ interface StatCardProps {
   icon: ReactNode;
   variant?: "default" | "accent" | "success" | "warning";
 }
-
 export function StatCard({
   title,
   value,
@@ -21,7 +19,6 @@ export function StatCard({
 }: StatCardProps) {
   const isPositive = change && change > 0;
   const isNegative = change && change < 0;
-
   return (
     <div
       className={cn(
@@ -95,5 +92,4 @@ export function StatCard({
         </div>
       </div>
     </div>
-  );
 }

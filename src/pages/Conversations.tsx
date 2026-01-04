@@ -20,27 +20,21 @@ import {
   AlertCircle,
 } from "lucide-react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-
 export default function Conversations() {
   const [selectedConversationId, setSelectedConversationId] = useState<string | null>(null);
   const [messageInput, setMessageInput] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
-
   // Fetch conversations from API
   const { data: conversations = [], isLoading: conversationsLoading, error: conversationsError } = useConversations();
-  
   // Fetch messages for selected conversation
   const { data: messages = [], isLoading: messagesLoading } = useConversationMessages(selectedConversationId);
-  
   // Send message mutation
   const sendMessageMutation = useSendMessage();
-
   // Get selected conversation details
   const selectedConversation = useMemo(() => {
     if (!selectedConversationId) return null;
     return conversations.find(c => c.id === selectedConversationId);
   }, [conversations, selectedConversationId]);
-
   // Filter conversations by search
   const filteredConversations = useMemo(() => {
     if (!searchQuery) return conversations;
@@ -48,16 +42,13 @@ export default function Conversations() {
     return conversations.filter((conv) =>
       (conv.customer_name || '').toLowerCase().includes(query) ||
       (conv.customer_id || '').toLowerCase().includes(query)
-    );
   }, [conversations, searchQuery]);
-
   // Auto-select first conversation if none selected
   useMemo(() => {
     if (!selectedConversationId && conversations.length > 0) {
       setSelectedConversationId(conversations[0].id);
     }
   }, [conversations, selectedConversationId]);
-
   // Format time ago
   const formatTimeAgo = (dateString: string | null) => {
     if (!dateString) return 'Just now';
@@ -67,17 +58,14 @@ export default function Conversations() {
       return 'Just now';
     }
   };
-
   // Handle send message
   const handleSendMessage = async () => {
     if (!messageInput.trim() || !selectedConversation) return;
-
     const chatId = selectedConversation.telegram_chat_id;
     if (!chatId) {
       alert('No chat ID found for this conversation');
       return;
     }
-
     try {
       await sendMessageMutation.mutateAsync({
         chatId: chatId,
@@ -85,11 +73,9 @@ export default function Conversations() {
       });
       setMessageInput("");
     } catch (error) {
-      console.error('Error sending message:', error);
       alert('Failed to send message. Please try again.');
     }
   };
-
   return (
     <DashboardLayout
       title="Conversations"
@@ -109,7 +95,6 @@ export default function Conversations() {
               />
             </div>
           </div>
-
           <div className="flex-1 overflow-y-auto">
             {conversationsLoading ? (
               <div className="flex items-center justify-center p-8">
@@ -135,10 +120,8 @@ export default function Conversations() {
                   .join('')
                   .toUpperCase()
                   .slice(0, 2);
-
                 const isSelected = selectedConversationId === conversation.id;
                 const isTelegram = conversation.telegram_chat_id;
-
                 return (
                   <div
                     key={conversation.id}
@@ -183,12 +166,10 @@ export default function Conversations() {
                       </span>
                     )}
                   </div>
-                );
               })
             )}
           </div>
         </div>
-
         {/* Chat Area */}
         <div className="flex-1 flex flex-col">
           {!selectedConversation ? (
@@ -233,7 +214,6 @@ export default function Conversations() {
                   </Button>
                 </div>
               </div>
-
               {/* Messages */}
               <div className="flex-1 overflow-y-auto p-4 space-y-4 bg-[#e5ddd5]">
                 {messagesLoading ? (
@@ -254,7 +234,6 @@ export default function Conversations() {
                           minute: '2-digit' 
                         })
                       : 'Just now';
-
                     return (
                       <div
                         key={message.id}
@@ -291,11 +270,9 @@ export default function Conversations() {
                           </div>
                         </div>
                       </div>
-                    );
                   })
                 )}
               </div>
-
               {/* Message Input */}
               <div className="p-4 border-t border-border bg-card">
                 <div className="flex items-center gap-3">
@@ -333,5 +310,4 @@ export default function Conversations() {
         </div>
       </div>
     </DashboardLayout>
-  );
 }

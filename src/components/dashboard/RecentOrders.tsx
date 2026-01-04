@@ -1,7 +1,6 @@
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { MoreHorizontal, Eye } from "lucide-react";
-
 const orders = [
   {
     id: "ORD-001",
@@ -44,14 +43,12 @@ const orders = [
     time: "1.5 hours ago",
   },
 ];
-
 const statusConfig = {
   completed: { label: "Completed", variant: "success" as const },
   processing: { label: "Processing", variant: "info" as const },
   pending: { label: "Pending", variant: "warning" as const },
   cancelled: { label: "Cancelled", variant: "destructive" as const },
 };
-
 export function RecentOrders() {
   return (
     <div className="rounded-xl border border-border bg-card">
@@ -64,7 +61,6 @@ export function RecentOrders() {
           View All
         </Button>
       </div>
-      
       <div className="divide-y divide-border">
         {orders.map((order) => {
           const status = statusConfig[order.status as keyof typeof statusConfig];
@@ -84,7 +80,6 @@ export function RecentOrders() {
                   <p className="text-sm text-muted-foreground">{order.product}</p>
                 </div>
               </div>
-              
               <div className="flex items-center gap-4">
                 <div className="text-right">
                   <p className="font-medium text-foreground">{order.amount}</p>
@@ -96,9 +91,7 @@ export function RecentOrders() {
                 </Button>
               </div>
             </div>
-          );
         })}
       </div>
     </div>
-  );
 }
