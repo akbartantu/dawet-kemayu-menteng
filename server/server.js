@@ -204,7 +204,16 @@ async function setWebhook() {
   }
 
   try {
-    const webhookPath = `${webhookUrl}/api/webhooks/telegram`;
+    // Check if WEBHOOK_URL already includes the path
+    let webhookPath;
+    if (webhookUrl.includes('/api/webhooks/telegram')) {
+      // Already has the full path, use as-is
+      webhookPath = webhookUrl;
+    } else {
+      // Just the base URL, add the path
+      webhookPath = `${webhookUrl}/api/webhooks/telegram`;
+    }
+    
     const url = `${TELEGRAM_API_BASE}${botToken}/setWebhook?url=${encodeURIComponent(webhookPath)}&drop_pending_updates=true`;
     const response = await fetch(url);
     const data = await response.json();
