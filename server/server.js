@@ -667,11 +667,11 @@ async function handleCallbackQuery(callbackQuery) {
   processedCallbacks.add(callbackKey);
 
   try {
-    // Answer callback query IMMEDIATELY to stop Telegram retry
-    await answerCallbackQuery(callbackId);
-
     if (data.startsWith('confirm_order_')) {
       const orderId = data.replace('confirm_order_', '');
+      
+      // Answer callback query with loading message
+      await answerCallbackQuery(callbackId, '⏳ Memproses konfirmasi...');
       
       // Remove inline keyboard to prevent double-click
       try {
@@ -689,6 +689,9 @@ async function handleCallbackQuery(callbackQuery) {
       return; // CRITICAL: Return early to prevent any other processing
     } else if (data.startsWith('cancel_order_')) {
       const orderId = data.replace('cancel_order_', '');
+      
+      // Answer callback query with loading message
+      await answerCallbackQuery(callbackId, '⏳ Membatalkan pesanan...');
       
       // Remove inline keyboard
       try {
