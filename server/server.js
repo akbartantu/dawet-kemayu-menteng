@@ -180,25 +180,39 @@ async function deleteWebhook() {
  */
 async function setWebhook() {
   const botToken = process.env.TELEGRAM_BOT_TOKEN;
-  const webhookUrl = process.env.WEBHOOK_URL;
   
   if (!botToken) {
     return;
   }
 
+  // Get webhook URL from environment variable or construct from Render URL
+  let webhookUrl = process.env.WEBHOOK_URL;
+  
+  // If WEBHOOK_URL not set, try to get from Render's RENDER_EXTERNAL_URL
+  if (!webhookUrl && process.env.RENDER_EXTERNAL_URL) {
+    webhookUrl = process.env.RENDER_EXTERNAL_URL;
+  }
+  
+  // If still not set, try to construct from common Render pattern
+  if (!webhookUrl && process.env.RENDER_SERVICE_NAME) {
+    webhookUrl = `https://${process.env.RENDER_SERVICE_NAME}.onrender.com`;
+  }
+
   if (!webhookUrl) {
+    // Cannot set webhook without URL
     return;
   }
 
   try {
-    const url = `${TELEGRAM_API_BASE}${botToken}/setWebhook?url=${encodeURIComponent(webhookUrl)}/api/webhooks/telegram&drop_pending_updates=true`;
+    const webhookPath = `${webhookUrl}/api/webhooks/telegram`;
+    const url = `${TELEGRAM_API_BASE}${botToken}/setWebhook?url=${encodeURIComponent(webhookPath)}&drop_pending_updates=true`;
     const response = await fetch(url);
     const data = await response.json();
 
     if (data.ok) {
       // Webhook set successfully
     } else {
-      // Webhook setup failed
+      // Webhook setup failed - check data.description for error
     }
   } catch (error) {
     // Error setting webhook
