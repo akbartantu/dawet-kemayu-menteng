@@ -677,9 +677,15 @@ async function handleCallbackQuery(callbackQuery) {
       try {
         await editMessageReplyMarkup(chatId, messageId, null);
       } catch (error) {
+        // Non-critical error, continue
       }
       
-      await handleOrderConfirmation(chatId, orderId, messageId);
+      // Process confirmation (this may take time, but callback is already answered)
+      handleOrderConfirmation(chatId, orderId, messageId).catch(error => {
+        // Send error message to user if confirmation fails
+        sendTelegramMessage(chatId, '❌ Terjadi kesalahan saat mengkonfirmasi pesanan. Silakan coba lagi atau hubungi admin.').catch(() => {});
+      });
+      
       return; // CRITICAL: Return early to prevent any other processing
     } else if (data.startsWith('cancel_order_')) {
       const orderId = data.replace('cancel_order_', '');
@@ -688,14 +694,27 @@ async function handleCallbackQuery(callbackQuery) {
       try {
         await editMessageReplyMarkup(chatId, messageId, null);
       } catch (error) {
+        // Non-critical error, continue
       }
       
-      await handleOrderCancellation(chatId, orderId, messageId);
+      // Process cancellation (this may take time, but callback is already answered)
+      handleOrderCancellation(chatId, orderId, messageId).catch(error => {
+        // Send error message to user if cancellation fails
+        sendTelegramMessage(chatId, '❌ Terjadi kesalahan saat membatalkan pesanan. Silakan coba lagi atau hubungi admin.').catch(() => {});
+      });
+      
       return; // CRITICAL: Return early
     } else {
+      // Unknown callback data - answer with error message
+      await answerCallbackQuery(callbackId, '❌ Perintah tidak dikenali');
     }
   } catch (error) {
-    // Don't send error message to user to avoid "null" issues
+    // Answer callback even on error to stop Telegram retry
+    try {
+      await answerCallbackQuery(callbackId, '❌ Terjadi kesalahan');
+    } catch (answerError) {
+      // If even answering fails, there's nothing we can do
+    }
   }
 }
 
