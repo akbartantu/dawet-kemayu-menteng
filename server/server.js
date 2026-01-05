@@ -175,6 +175,37 @@ async function deleteWebhook() {
 }
 
 /**
+ * Set webhook URL (for production)
+ * Registers the webhook URL with Telegram so messages are sent to our server
+ */
+async function setWebhook() {
+  const botToken = process.env.TELEGRAM_BOT_TOKEN;
+  const webhookUrl = process.env.WEBHOOK_URL;
+  
+  if (!botToken) {
+    return;
+  }
+
+  if (!webhookUrl) {
+    return;
+  }
+
+  try {
+    const url = `${TELEGRAM_API_BASE}${botToken}/setWebhook?url=${encodeURIComponent(webhookUrl)}/api/webhooks/telegram&drop_pending_updates=true`;
+    const response = await fetch(url);
+    const data = await response.json();
+
+    if (data.ok) {
+      // Webhook set successfully
+    } else {
+      // Webhook setup failed
+    }
+  } catch (error) {
+    // Error setting webhook
+  }
+}
+
+/**
  * Step 1B: Polling Mode (for local development)
  * Instead of webhook, we ask Telegram for new messages every few seconds
  */
@@ -2145,6 +2176,8 @@ app.listen(PORT, async () => {
   // Start polling only in development mode
   // In production, use webhook instead
   if (process.env.NODE_ENV === 'production') {
+    // Set webhook for production
+    await setWebhook();
   } else {
     startPolling();
   }

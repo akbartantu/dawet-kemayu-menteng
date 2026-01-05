@@ -148,12 +148,13 @@ Runs on `http://localhost:8080` (or configured port)
    - `GOOGLE_SERVICE_ACCOUNT_KEY_FILE` (upload JSON file)
    - `GOOGLE_SPREADSHEET_ID`
    - `NODE_ENV=production`
+   - `WEBHOOK_URL` (optional - your Render app URL, e.g., `https://your-app.onrender.com`)
+     - If not set, the code will try to auto-detect from `RENDER_EXTERNAL_URL`
 4. Set build command: `cd server && npm install`
 5. Set start command: `cd server && node server.js`
-6. Configure Telegram webhook:
-   ```bash
-   curl "https://api.telegram.org/bot<YOUR_BOT_TOKEN>/setWebhook?url=https://your-app.onrender.com/api/webhooks/telegram"
-   ```
+6. **Webhook is automatically set on startup** - no manual configuration needed!
+   - The server will automatically register the webhook URL with Telegram when it starts
+   - Make sure `WEBHOOK_URL` is set to your Render app URL (or it will auto-detect from Render environment)
 
 ### Deploy to Vercel/Render (Frontend)
 
