@@ -126,7 +126,6 @@ const processedConfirmations = new Set();
  * Telegram sends messages to this endpoint when customers message the bot
  */
 app.post('/api/webhooks/telegram', (req, res) => {
-
   // Always respond 200 OK to Telegram immediately
   res.status(200).send('OK');
 
@@ -138,7 +137,13 @@ app.post('/api/webhooks/telegram', (req, res) => {
     if (update.message) {
       handleTelegramMessage(update.message);
     }
+    
+    // Handle callback queries (button clicks)
+    if (update.callback_query) {
+      handleCallbackQuery(update.callback_query);
+    }
   } catch (error) {
+    // Error processing webhook
   }
 });
 
