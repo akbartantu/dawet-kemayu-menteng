@@ -529,8 +529,7 @@ export function formatInvoice(order, priceList) {
   
   invoice += `Pengiriman: ${metodePengiriman}\n`;
   
-  // Display Ongkir based on delivery_fee value and source
-  const deliveryFeeSource = order._delivery_fee_source || 'NOT_PROVIDED';
+  // Display Ongkir based on delivery_fee value and source (use existing deliveryFeeSource variable)
   if (shippingPrice > 0) {
     invoice += `Ongkir: Rp${formatPrice(shippingPrice)}\n\n`;
   } else if (deliveryFeeSource === 'NOT_PROVIDED') {
