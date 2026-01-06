@@ -155,6 +155,61 @@ app.post('/api/webhooks/telegram', (req, res) => {
 });
 
 /**
+ * Set webhook for production deployment
+ */
+async function setWebhook() {
+  const botToken = process.env.TELEGRAM_BOT_TOKEN;
+  
+  if (!botToken) {
+    console.log('⚠️  TELEGRAM_BOT_TOKEN not set. Cannot set webhook.');
+    return;
+  }
+
+  // Get webhook URL from environment variable or construct from Render URL
+  let webhookUrl = process.env.WEBHOOK_URL;
+  
+  // If WEBHOOK_URL not set, try to get from Render's RENDER_EXTERNAL_URL
+  if (!webhookUrl && process.env.RENDER_EXTERNAL_URL) {
+    webhookUrl = process.env.RENDER_EXTERNAL_URL;
+  }
+  
+  // If still not set, try to construct from common Render pattern
+  if (!webhookUrl && process.env.RENDER_SERVICE_NAME) {
+    webhookUrl = `https://${process.env.RENDER_SERVICE_NAME}.onrender.com`;
+  }
+
+  if (!webhookUrl) {
+    console.log('⚠️  WEBHOOK_URL not set. Cannot set webhook automatically.');
+    console.log('   Set WEBHOOK_URL environment variable to your Render app URL');
+    return;
+  }
+
+  try {
+    // Check if WEBHOOK_URL already includes the path
+    let webhookPath;
+    if (webhookUrl.includes('/api/webhooks/telegram')) {
+      // Already has the full path, use as-is
+      webhookPath = webhookUrl;
+    } else {
+      // Just the base URL, add the path
+      webhookPath = `${webhookUrl}/api/webhooks/telegram`;
+    }
+    
+    const url = `${TELEGRAM_API_BASE}${botToken}/setWebhook?url=${encodeURIComponent(webhookPath)}&drop_pending_updates=true`;
+    const response = await fetch(url);
+    const data = await response.json();
+
+    if (data.ok) {
+      console.log(`✅ Webhook set successfully: ${webhookPath}`);
+    } else {
+      console.error(`❌ Webhook setup failed: ${data.description || 'Unknown error'}`);
+    }
+  } catch (error) {
+    console.error('❌ Error setting webhook:', error.message);
+  }
+}
+
+/**
  * Delete webhook (needed before polling)
  * Telegram doesn't allow webhook and polling at the same time
  */
