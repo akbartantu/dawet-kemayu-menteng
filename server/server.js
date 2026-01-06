@@ -26,6 +26,7 @@ import {
   getPriceList,
   updateWaitingListOrderStatus,
   getConversationById,
+  ensureOrdersPaymentHeaders,
 } from './google-sheets.js';
 import {
   validateStatusTransition,
@@ -2457,7 +2458,8 @@ app.listen(PORT, async () => {
   // In production, use webhook instead
   if (process.env.NODE_ENV === 'production') {
     console.log(`\n🌐 Production mode: Using webhook (polling disabled)`);
-    console.log(`   Make sure webhook is set: https://api.telegram.org/bot<TOKEN>/setWebhook?url=<YOUR_URL>/api/webhooks/telegram`);
+    // Automatically set webhook in production
+    await setWebhook();
   } else {
     console.log(`\n🔄 Development mode: Starting polling...`);
     console.log(`   (This will automatically remove any existing webhook)`);
