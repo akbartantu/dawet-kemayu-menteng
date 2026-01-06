@@ -18,7 +18,8 @@ import {
   formatPrice 
 } from './price-calculator.js';
 import { 
-  parseOrderFromMessage, 
+  parseOrderFromMessage,
+  parseOrderFromMessageAuto,
   validateOrder 
 } from './order-parser.js';
 import { 
@@ -50,6 +51,7 @@ export async function handleAdminAuth(chatId, userId, messageText, sendMessage) 
     const setupCode = process.env.ADMIN_SETUP_CODE;
     if (!setupCode) {
       await sendMessage(chatId, '❌ Admin setup tidak dikonfigurasi. Hubungi administrator sistem.');
+      console.error('⚠️ ADMIN_SETUP_CODE not set in environment variables');
       return;
     }
     
@@ -78,7 +80,9 @@ export async function handleAdminAuth(chatId, userId, messageText, sendMessage) 
       '• /today_reminder'
     );
     
+    console.log(`✅ Admin access granted to user ${userId} via /admin_auth`);
   } catch (error) {
+    console.error('❌ Error in handleAdminAuth:', error);
     await sendMessage(chatId, '❌ Terjadi kesalahan saat memberikan akses admin. Silakan coba lagi.');
   }
 }
@@ -91,6 +95,7 @@ export async function handleAdminAuth(chatId, userId, messageText, sendMessage) 
  */
 export async function isAdmin(telegramUserId) {
   if (!telegramUserId) {
+    console.log('⚠️ [ADMIN_CHECK] No userId provided');
     return false;
   }
   
@@ -98,6 +103,7 @@ export async function isAdmin(telegramUserId) {
   const userIdString = String(telegramUserId);
   const userIdNumber = typeof telegramUserId === 'number' ? telegramUserId : parseInt(userIdString);
   
+  console.log(`🔍 [ADMIN_CHECK] Checking admin status - userId: ${telegramUserId} (string: "${userIdString}", number: ${userIdNumber})`);
   
   try {
     // First check Users sheet - try both string and number formats
@@ -108,8 +114,10 @@ export async function isAdmin(telegramUserId) {
       role = await getUserRole('telegram', String(userIdNumber));
     }
     
+    console.log(`🔍 [ADMIN_CHECK] Users sheet lookup - role: ${role || 'not found'}`);
     
     if (role === 'admin') {
+      console.log(`✅ [ADMIN_CHECK] User ${telegramUserId} is admin (from Users sheet)`);
       return true;
     }
     
@@ -120,11 +128,15 @@ export async function isAdmin(telegramUserId) {
     
     const isEnvAdmin = adminIds.includes(userIdNumber);
     if (isEnvAdmin) {
+      console.log(`✅ [ADMIN_CHECK] User ${telegramUserId} is admin (from env var)`);
       return true;
     }
     
+    console.log(`❌ [ADMIN_CHECK] User ${telegramUserId} is NOT admin (role: ${role || 'customer'})`);
     return false;
   } catch (error) {
+    console.error('❌ [ADMIN_CHECK] Error checking admin status:', error);
+    console.error('❌ [ADMIN_CHECK] Stack:', error.stack);
     
     // Fallback to env var on error
     const adminIds = process.env.ADMIN_TELEGRAM_USER_IDS 
@@ -133,6 +145,7 @@ export async function isAdmin(telegramUserId) {
     
     const isEnvAdmin = adminIds.includes(userIdNumber);
     if (isEnvAdmin) {
+      console.log(`✅ [ADMIN_CHECK] User ${telegramUserId} is admin (from env var fallback)`);
       return true;
     }
     
@@ -174,6 +187,7 @@ export async function handleNewOrder(chatId, userId, sendMessage) {
       `Silakan kirim template pesanan untuk di-parse, atau gunakan /parse_order untuk memulai.`
     );
   } catch (error) {
+    console.error('❌ Error creating new order:', error);
     await sendMessage(chatId, '❌ Terjadi kesalahan saat membuat order baru.');
   }
 }
@@ -182,27 +196,37 @@ export async function handleNewOrder(chatId, userId, sendMessage) {
  * Handle /parse_order command
  * Parses order template and saves to database
  */
-export async function handleParseOrder(chatId, userId, messageText, sendMessage) {
+export async function handleParseOrder(chatId, userId, messageText, sendMessage, replyToMessage = null) {
   if (!(await requireAdmin(userId, sendMessage, chatId))) {
     return;
   }
 
   try {
-    // Remove /parse_order command from message
-    const orderText = messageText.replace(/^\/parse_order\s*/i, '').trim();
+    let orderText = '';
+    
+    // Prefer reply_to_message if available
+    if (replyToMessage && replyToMessage.text) {
+      orderText = replyToMessage.text.trim();
+      console.log(`🔍 [PARSE_ORDER] Using reply_to_message text (${orderText.length} chars)`);
+    } else {
+      // Fallback: Remove /parse_order command from message
+      orderText = messageText.replace(/^\/parse_order\s*/i, '').trim();
+    }
     
     if (!orderText) {
       await sendMessage(
         chatId,
         '❌ Format tidak valid.\n\n' +
-        'Gunakan: /parse_order [template pesanan]\n\n' +
-        'Atau kirim template pesanan setelah perintah /parse_order.'
+        '**Cara penggunaan:**\n' +
+        '1. Reply ke pesanan yang ingin di-parse, lalu ketik /parse_order\n' +
+        '2. Atau ketik: /parse_order [template pesanan]\n\n' +
+        '**Rekomendasi:** Gunakan cara 1 (reply) untuk hasil yang lebih akurat.'
       );
       return;
     }
 
-    // Parse order from template
-    const parsedOrder = parseOrderFromMessage(orderText);
+    // Parse order from template (use auto parser for better format detection)
+    const parsedOrder = parseOrderFromMessageAuto(orderText);
     const validation = validateOrder(parsedOrder);
 
     if (!validation.valid) {
@@ -263,6 +287,7 @@ export async function handleParseOrder(chatId, userId, messageText, sendMessage)
 
     await sendMessage(chatId, summary);
   } catch (error) {
+    console.error('❌ Error parsing order:', error);
     await sendMessage(chatId, '❌ Terjadi kesalahan saat memparse order. Silakan coba lagi.');
   }
 }
@@ -276,10 +301,12 @@ export async function handleParseOrder(chatId, userId, messageText, sendMessage)
  * @param {Function} sendMessage - Function to send Telegram message
  */
 export async function handleOrderDetail(chatId, userId, orderId, sendMessage) {
+  console.log(`🔍 [ORDER_DETAIL] Command received - chatId: ${chatId}, userId: ${userId}, orderId: ${orderId || 'MISSING'}`);
   
   try {
     // Check admin access
     const isUserAdmin = await isAdmin(userId);
+    console.log(`🔍 [ORDER_DETAIL] Admin check - userId: ${userId}, isAdmin: ${isUserAdmin}`);
     
     if (!isUserAdmin) {
       await sendMessage(chatId, '❌ Anda tidak memiliki akses ke perintah ini. Perintah ini hanya untuk admin.');
@@ -292,6 +319,7 @@ export async function handleOrderDetail(chatId, userId, orderId, sendMessage) {
     }
 
     const trimmedOrderId = orderId.trim();
+    console.log(`🔍 [ORDER_DETAIL] Looking up order: ${trimmedOrderId}`);
 
     const order = await getOrderById(trimmedOrderId);
     
@@ -300,6 +328,7 @@ export async function handleOrderDetail(chatId, userId, orderId, sendMessage) {
       return;
     }
 
+    console.log(`✅ [ORDER_DETAIL] Order found: ${order.id}`);
 
     // Get price list for calculation
     const priceList = await getPriceList();
@@ -369,7 +398,10 @@ export async function handleOrderDetail(chatId, userId, orderId, sendMessage) {
     }
 
     await sendMessage(chatId, detail);
+    console.log(`✅ [ORDER_DETAIL] Successfully sent order details for ${trimmedOrderId}`);
   } catch (error) {
+    console.error('❌ [ORDER_DETAIL] Error getting order detail:', error);
+    console.error('❌ [ORDER_DETAIL] Stack:', error.stack);
     await sendMessage(chatId, '❌ Maaf, ada error saat memproses perintah ini. Coba lagi ya.');
   }
 }
@@ -407,6 +439,7 @@ export async function handleStatus(chatId, userId, orderId, sendMessage) {
       `Created: ${order.created_at ? new Date(order.created_at).toLocaleString('id-ID') : 'N/A'}`
     );
   } catch (error) {
+    console.error('❌ Error getting status:', error);
     await sendMessage(chatId, '❌ Terjadi kesalahan saat mengambil status order.');
   }
 }
@@ -417,6 +450,7 @@ export async function handleStatus(chatId, userId, orderId, sendMessage) {
  * @param {Function} sendMessage - Function to send Telegram message
  */
 export async function handlePay(chatId, userId, orderId, amountInput, sendMessage) {
+  console.log(`🔍 [PAY] Command received - chatId: ${chatId}, userId: ${userId}, orderId: ${orderId || 'MISSING'}, amountInput: ${amountInput || 'MISSING'}`);
   
   if (!(await requireAdmin(userId, sendMessage, chatId))) {
     await sendMessage(chatId, '❌ Anda tidak memiliki akses ke perintah ini.');
@@ -447,10 +481,12 @@ export async function handlePay(chatId, userId, orderId, amountInput, sendMessag
       return;
     }
 
+    console.log(`🔍 [PAY] Parsed amount: ${newPaymentAmount} (from input: "${amountInput}")`);
 
     // Update payment (will accumulate with existing)
     const result = await updateOrderPayment(orderId, newPaymentAmount);
     
+    console.log(`✅ [PAY] Payment updated - Order: ${orderId}, New Payment: ${newPaymentAmount}, Total Paid: ${result.paidAmount}, Status: ${result.paymentStatus}`);
     
     const message = formatPaymentStatusMessage({
       id: result.orderId,
@@ -463,6 +499,8 @@ export async function handlePay(chatId, userId, orderId, amountInput, sendMessag
 
     await sendMessage(chatId, message);
   } catch (error) {
+    console.error('❌ [PAY] Error updating payment:', error);
+    console.error('❌ [PAY] Stack:', error.stack);
     // Return early - do NOT show status card after error
     await sendMessage(chatId, `❌ Terjadi kesalahan: ${error.message || 'Gagal memperbarui pembayaran. Silakan coba lagi.'}`);
     return; // Early return to prevent any further processing
@@ -496,6 +534,7 @@ export async function handlePaymentStatus(chatId, userId, orderId, sendMessage) 
     const message = formatPaymentStatusMessage(order);
     await sendMessage(chatId, message);
   } catch (error) {
+    console.error('❌ Error getting payment status:', error);
     await sendMessage(chatId, '❌ Terjadi kesalahan saat mengambil status pembayaran.');
   }
 }
@@ -551,6 +590,7 @@ async function getOrdersByDate(targetDate, paymentStatusFilter = null) {
         uniqueOrders.push(order);
       } else {
         // Duplicate found - log warning
+        console.warn(`⚠️ [GET_ORDERS_BY_DATE] Duplicate order_id found: ${orderId} (skipping duplicate)`);
       }
     }
     
@@ -566,6 +606,7 @@ async function getOrdersByDate(targetDate, paymentStatusFilter = null) {
         }
         return orderPaymentStatus === filterUpper;
       });
+      console.log(`🔍 [GET_ORDERS_BY_DATE] Filtered by payment_status="${paymentStatusFilter}": ${uniqueOrders.length} -> ${finalOrders.length} orders`);
     }
     
     // Sort by delivery_time (HH:MM format, lexicographically safe)
@@ -577,6 +618,7 @@ async function getOrdersByDate(targetDate, paymentStatusFilter = null) {
     
     return finalOrders;
   } catch (error) {
+    console.error('❌ [GET_ORDERS_BY_DATE] Error:', error);
     throw error;
   }
 }
@@ -606,6 +648,7 @@ function formatItemsForRecap(itemsJson) {
     }).join('\n');
   } catch (error) {
     // Fallback: try to display raw value
+    console.warn('⚠️ [FORMAT_ITEMS] Error parsing items_json:', error.message);
     if (typeof itemsJson === 'string' && itemsJson.trim()) {
       return `- ${itemsJson}`;
     }
@@ -659,6 +702,7 @@ function formatNotesForRecap(notesJson) {
     return '- (tidak ada)';
   } catch (error) {
     // Fallback: try to display raw value
+    console.warn('⚠️ [FORMAT_NOTES] Error parsing notes_json:', error.message);
     if (typeof notesJson === 'string' && notesJson.trim()) {
       return `- ${notesJson}`;
     }
@@ -730,6 +774,7 @@ function formatRecapMessage(orders, date) {
         });
       }
     } catch (e) {
+      console.warn('⚠️ [FORMAT_RECAP] Error calculating total cups:', e.message);
     }
     
     // Calculate styrofoam boxes needed (1 box per 50 cups, rounded up)
@@ -763,6 +808,7 @@ function formatRecapMessage(orders, date) {
         }
       }
     } catch (e) {
+      console.warn('⚠️ [FORMAT_RECAP] Error formatting items:', e.message);
       itemsList = '- (tidak ada)\n';
     }
     
@@ -802,6 +848,7 @@ function formatRecapMessage(orders, date) {
         notesStr = '-';
       }
     } catch (e) {
+      console.warn('⚠️ [FORMAT_RECAP] Error formatting notes:', e.message);
       notesStr = '-';
     }
     
@@ -910,6 +957,7 @@ function formatOrderListMessage(orders, date) {
         });
       }
     } catch (e) {
+      console.warn('⚠️ [FORMAT_ORDER_LIST] Error calculating total cups:', e.message);
     }
     
     // Calculate styrofoam boxes needed (1 box per 50 cups, rounded up)
@@ -943,6 +991,7 @@ function formatOrderListMessage(orders, date) {
         }
       }
     } catch (e) {
+      console.warn('⚠️ [FORMAT_ORDER_LIST] Error formatting items:', e.message);
       itemsList = '- (tidak ada)\n';
     }
     
@@ -982,6 +1031,7 @@ function formatOrderListMessage(orders, date) {
         notesStr = '-';
       }
     } catch (e) {
+      console.warn('⚠️ [FORMAT_ORDER_LIST] Error formatting notes:', e.message);
       notesStr = '-';
     }
     
@@ -1044,6 +1094,7 @@ function getTomorrowDate() {
  */
 export async function handleRecapH1(chatId, userId, sendMessage) {
   try {
+    console.log(`🔍 [RECAP_H1] Command received - userId: ${userId}, chatId: ${chatId}`);
     
     // Check admin access
     if (!(await isAdmin(userId))) {
@@ -1053,20 +1104,26 @@ export async function handleRecapH1(chatId, userId, sendMessage) {
     
     // Get tomorrow's date
     const tomorrow = getTomorrowDate();
+    console.log(`🔍 [RECAP_H1] Fetching orders for tomorrow: ${tomorrow}`);
     
     // Get orders for tomorrow (filter by FULLPAID only)
     const orders = await getOrdersByDate(tomorrow, 'FULLPAID');
+    console.log(`✅ [RECAP_H1] Found ${orders.length} FULLPAID orders for ${tomorrow}`);
     
     // Log first 3 order IDs for sanity check
     if (orders.length > 0) {
       const orderIds = orders.slice(0, 3).map(o => o.id).join(', ');
+      console.log(`🔍 [RECAP_H1] First 3 order IDs: ${orderIds}`);
     }
     
     // Format and send recap message
     const message = formatRecapMessage(orders, tomorrow);
     await sendMessage(chatId, message);
     
+    console.log(`✅ [RECAP_H1] Recap sent successfully`);
   } catch (error) {
+    console.error('❌ [RECAP_H1] Error:', error);
+    console.error('❌ [RECAP_H1] Stack:', error.stack);
     await sendMessage(chatId, '❌ Terjadi kesalahan saat mengambil rekapan pesanan. Silakan coba lagi.');
   }
 }
@@ -1080,6 +1137,7 @@ export async function handleRecapH1(chatId, userId, sendMessage) {
  */
 export async function handleOrdersDate(chatId, userId, dateStr, sendMessage) {
   try {
+    console.log(`🔍 [ORDERS_DATE] Command received - userId: ${userId}, dateStr: "${dateStr}"`);
     
     // Check admin access
     if (!(await isAdmin(userId))) {
@@ -1103,20 +1161,26 @@ export async function handleOrdersDate(chatId, userId, dateStr, sendMessage) {
       targetDate = dateStr;
     }
     
+    console.log(`🔍 [ORDERS_DATE] Fetching orders for date: ${targetDate}`);
     
     // Get orders for target date (filter by FULLPAID only)
     const orders = await getOrdersByDate(targetDate, 'FULLPAID');
+    console.log(`✅ [ORDERS_DATE] Found ${orders.length} FULLPAID orders for ${targetDate}`);
     
     // Log first 3 order IDs for sanity check
     if (orders.length > 0) {
       const orderIds = orders.slice(0, 3).map(o => o.id).join(', ');
+      console.log(`🔍 [ORDERS_DATE] First 3 order IDs: ${orderIds}`);
     }
     
     // Format and send list message
     const message = formatOrderListMessage(orders, targetDate);
     await sendMessage(chatId, message);
     
+    console.log(`✅ [ORDERS_DATE] Order list sent successfully`);
   } catch (error) {
+    console.error('❌ [ORDERS_DATE] Error:', error);
+    console.error('❌ [ORDERS_DATE] Stack:', error.stack);
     await sendMessage(chatId, '❌ Terjadi kesalahan saat mengambil daftar pesanan. Silakan coba lagi.');
   }
 }

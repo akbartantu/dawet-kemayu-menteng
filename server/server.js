@@ -26,7 +26,6 @@ import {
   getPriceList,
   updateWaitingListOrderStatus,
   getConversationById,
-  ensureOrdersPaymentHeaders,
 } from './google-sheets.js';
 import {
   validateStatusTransition,
@@ -120,6 +119,70 @@ const TELEGRAM_API_BASE = 'https://api.telegram.org/bot';
 let lastUpdateId = 0;
 let pollingInterval = null;
 
+// Cache bot username to avoid repeated API calls
+let cachedBotUsername = null;
+
+/**
+ * Get bot username from Telegram API (cached)
+ */
+async function getBotUsername() {
+  if (cachedBotUsername) {
+    return cachedBotUsername;
+  }
+
+  const botToken = process.env.TELEGRAM_BOT_TOKEN;
+  if (!botToken) {
+    return null;
+  }
+
+  try {
+    const url = `${TELEGRAM_API_BASE}${botToken}/getMe`;
+    const response = await fetch(url);
+    const data = await response.json();
+
+    if (data.ok && data.result?.username) {
+      cachedBotUsername = data.result.username;
+      return cachedBotUsername;
+    }
+  } catch (error) {
+    console.warn('⚠️ Could not fetch bot username:', error.message);
+  }
+
+  return null;
+}
+
+/**
+ * Check if message contains bot mention
+ * @param {string} text - Message text
+ * @param {string} botUsername - Bot username (without @)
+ * @returns {boolean} True if message mentions the bot
+ */
+function containsBotMention(text, botUsername) {
+  if (!text || !botUsername) {
+    return false;
+  }
+
+  // Check for @username mention (case-insensitive)
+  const mentionPattern = new RegExp(`@${botUsername.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`, 'i');
+  return mentionPattern.test(text);
+}
+
+/**
+ * Strip bot mentions from text
+ * @param {string} text - Message text
+ * @param {string} botUsername - Bot username (without @)
+ * @returns {string} Text with mentions removed
+ */
+function stripBotMentions(text, botUsername) {
+  if (!text || !botUsername) {
+    return text;
+  }
+
+  // Remove @username mentions (case-insensitive)
+  const mentionPattern = new RegExp(`@${botUsername.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`, 'gi');
+  return text.replace(mentionPattern, '').trim();
+}
+
 // Track processed order confirmations to prevent duplicates
 const processedConfirmations = new Set();
 
@@ -128,7 +191,7 @@ const processedConfirmations = new Set();
  * Option A: Webhook (for production)
  * Telegram sends messages to this endpoint when customers message the bot
  */
-app.post('/api/webhooks/telegram', (req, res) => {
+app.post('/api/webhooks/telegram', async (req, res) => {
   console.log('📨 Received Telegram webhook:', JSON.stringify(req.body, null, 2));
 
   // Always respond 200 OK to Telegram immediately
@@ -141,8 +204,8 @@ app.post('/api/webhooks/telegram', (req, res) => {
     // Telegram sends updates in this structure
     // Handle both private messages and group messages
     if (update.message) {
-      // Process messages from all chat types: private, group, supergroup
-      handleTelegramMessage(update.message);
+      // Process messages with group/supergroup gating
+      await handleTelegramMessage(update.message);
     }
     
     // Handle callback queries (button clicks) - works in all chat types
@@ -153,61 +216,6 @@ app.post('/api/webhooks/telegram', (req, res) => {
     console.error('❌ Error processing Telegram webhook:', error);
   }
 });
-
-/**
- * Set webhook for production deployment
- */
-async function setWebhook() {
-  const botToken = process.env.TELEGRAM_BOT_TOKEN;
-  
-  if (!botToken) {
-    console.log('⚠️  TELEGRAM_BOT_TOKEN not set. Cannot set webhook.');
-    return;
-  }
-
-  // Get webhook URL from environment variable or construct from Render URL
-  let webhookUrl = process.env.WEBHOOK_URL;
-  
-  // If WEBHOOK_URL not set, try to get from Render's RENDER_EXTERNAL_URL
-  if (!webhookUrl && process.env.RENDER_EXTERNAL_URL) {
-    webhookUrl = process.env.RENDER_EXTERNAL_URL;
-  }
-  
-  // If still not set, try to construct from common Render pattern
-  if (!webhookUrl && process.env.RENDER_SERVICE_NAME) {
-    webhookUrl = `https://${process.env.RENDER_SERVICE_NAME}.onrender.com`;
-  }
-
-  if (!webhookUrl) {
-    console.log('⚠️  WEBHOOK_URL not set. Cannot set webhook automatically.');
-    console.log('   Set WEBHOOK_URL environment variable to your Render app URL');
-    return;
-  }
-
-  try {
-    // Check if WEBHOOK_URL already includes the path
-    let webhookPath;
-    if (webhookUrl.includes('/api/webhooks/telegram')) {
-      // Already has the full path, use as-is
-      webhookPath = webhookUrl;
-    } else {
-      // Just the base URL, add the path
-      webhookPath = `${webhookUrl}/api/webhooks/telegram`;
-    }
-    
-    const url = `${TELEGRAM_API_BASE}${botToken}/setWebhook?url=${encodeURIComponent(webhookPath)}&drop_pending_updates=true`;
-    const response = await fetch(url);
-    const data = await response.json();
-
-    if (data.ok) {
-      console.log(`✅ Webhook set successfully: ${webhookPath}`);
-    } else {
-      console.error(`❌ Webhook setup failed: ${data.description || 'Unknown error'}`);
-    }
-  } catch (error) {
-    console.error('❌ Error setting webhook:', error.message);
-  }
-}
 
 /**
  * Delete webhook (needed before polling)
@@ -377,19 +385,51 @@ async function handleTelegramMessage(message) {
   const chatId = message.chat.id;
   const userId = message.from?.id;
   const userName = message.from?.first_name || message.from?.username || 'Unknown';
+  const messageText = message.text || '';
   
   console.log('💬 New Telegram message received:', {
     from: userName,
     userId: userId,
     chatId: chatId,
     chatType: chatType,
-    text: message.text?.substring(0, 100) || '',
+    text: messageText.substring(0, 100) || '',
     messageId: message.message_id,
   });
 
-  // Log warning if bot might not receive plain text in groups (privacy mode)
-  if (chatType !== 'private' && !message.text?.startsWith('/')) {
-    console.log(`ℹ️ [GROUP_MESSAGE] Received non-command message in ${chatType}. If bot doesn't respond, check Telegram privacy settings.`);
+  // Group/Supergroup message gating (privacy mode)
+  if (chatType === 'group' || chatType === 'supergroup') {
+    const isCommand = messageText.startsWith('/');
+    const botUsername = await getBotUsername();
+    const isMention = botUsername ? containsBotMention(messageText, botUsername) : false;
+
+    console.log(`🔍 [GROUP_GATE] chatType: ${chatType}, isCommand: ${isCommand}, isMention: ${isMention}`);
+
+    // If not a command and not a mention, ignore silently
+    if (!isCommand && !isMention) {
+      console.log(`⏸️ [GROUP_GATE] Ignoring message (not command, not mention)`);
+      return; // Silent ignore - no response
+    }
+
+    // If it's a mention but not a command, handle mention
+    if (!isCommand && isMention) {
+      // Strip mention before processing
+      const textWithoutMention = stripBotMentions(messageText, botUsername);
+      
+      // Try to parse as order first
+      const detectedFormat = detectOrderFormat(textWithoutMention);
+      if (detectedFormat) {
+        console.log(`🔍 [GROUP_MENTION] Detected order format: ${detectedFormat}, parsing...`);
+        // Continue to order parsing below (will use textWithoutMention)
+        message.text = textWithoutMention;
+      } else {
+        // Not an order, send help message
+        console.log(`💬 [GROUP_MENTION] Not an order format, sending help message`);
+        const helpMessage = 'Halo kak 😊 Ketik /pesan untuk format pesanan, /menu untuk daftar menu.';
+        const replyToId = message.message_id;
+        await sendTelegramMessage(chatId, helpMessage, null, replyToId);
+        return;
+      }
+    }
   }
 
   try {
@@ -1461,7 +1501,8 @@ function handleTelegramCommand(message) {
       break;
     case '/parse_order':
       console.log(`🔍 [COMMAND] /parse_order`);
-      handleParseOrder(chatId, userId, messageText, sendTelegramMessage).catch(error => {
+      const replyToMessage = message.reply_to_message;
+      handleParseOrder(chatId, userId, messageText, sendTelegramMessage, replyToMessage).catch(error => {
         console.error('❌ [COMMAND] Error in /parse_order handler:', error);
         console.error('❌ [COMMAND] Stack:', error.stack);
         sendTelegramMessage(chatId, '❌ Maaf, ada error saat memproses perintah ini. Coba lagi ya.');
@@ -2513,8 +2554,7 @@ app.listen(PORT, async () => {
   // In production, use webhook instead
   if (process.env.NODE_ENV === 'production') {
     console.log(`\n🌐 Production mode: Using webhook (polling disabled)`);
-    // Automatically set webhook in production
-    await setWebhook();
+    console.log(`   Make sure webhook is set: https://api.telegram.org/bot<TOKEN>/setWebhook?url=<YOUR_URL>/api/webhooks/telegram`);
   } else {
     console.log(`\n🔄 Development mode: Starting polling...`);
     console.log(`   (This will automatically remove any existing webhook)`);
