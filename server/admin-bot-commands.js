@@ -209,8 +209,15 @@ export async function handleParseOrder(chatId, userId, messageText, sendMessage,
       orderText = replyToMessage.text.trim();
       console.log(`🔍 [PARSE_ORDER] Using reply_to_message text (${orderText.length} chars)`);
     } else {
-      // Fallback: Remove /parse_order command from message
-      orderText = messageText.replace(/^\/parse_order\s*/i, '').trim();
+      // Extract payload from same message (everything after first newline or after command)
+      const newlineIndex = messageText.indexOf('\n');
+      if (newlineIndex >= 0) {
+        orderText = messageText.substring(newlineIndex + 1).trim();
+        console.log(`🔍 [PARSE_ORDER] Using payload from same message (${orderText.length} chars)`);
+      } else {
+        // Fallback: Remove /parse_order command from message
+        orderText = messageText.replace(/^\/parse_order\s*/i, '').trim();
+      }
     }
     
     if (!orderText) {
@@ -219,7 +226,8 @@ export async function handleParseOrder(chatId, userId, messageText, sendMessage,
         '❌ Format tidak valid.\n\n' +
         '**Cara penggunaan:**\n' +
         '1. Reply ke pesanan yang ingin di-parse, lalu ketik /parse_order\n' +
-        '2. Atau ketik: /parse_order [template pesanan]\n\n' +
+        '2. Atau ketik: /parse_order [template pesanan]\n' +
+        '3. Atau kirim: /parse_order\\n[template pesanan]\n\n' +
         '**Rekomendasi:** Gunakan cara 1 (reply) untuk hasil yang lebih akurat.'
       );
       return;

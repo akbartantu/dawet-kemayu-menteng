@@ -397,39 +397,19 @@ async function handleTelegramMessage(message) {
   });
 
   // Group/Supergroup message gating (privacy mode)
+  // In groups, bot can only receive command messages reliably
   if (chatType === 'group' || chatType === 'supergroup') {
     const isCommand = messageText.startsWith('/');
-    const botUsername = await getBotUsername();
-    const isMention = botUsername ? containsBotMention(messageText, botUsername) : false;
 
-    console.log(`🔍 [GROUP_GATE] chatType: ${chatType}, isCommand: ${isCommand}, isMention: ${isMention}`);
+    console.log(`🔍 [GROUP_GATE] chatType: ${chatType}, isCommand: ${isCommand}`);
 
-    // If not a command and not a mention, ignore silently
-    if (!isCommand && !isMention) {
-      console.log(`⏸️ [GROUP_GATE] Ignoring message (not command, not mention)`);
+    // If not a command, ignore silently (privacy mode)
+    if (!isCommand) {
+      console.log(`⏸️ [GROUP_GATE] Ignoring message (not a command, privacy mode)`);
       return; // Silent ignore - no response
     }
 
-    // If it's a mention but not a command, handle mention
-    if (!isCommand && isMention) {
-      // Strip mention before processing
-      const textWithoutMention = stripBotMentions(messageText, botUsername);
-      
-      // Try to parse as order first
-      const detectedFormat = detectOrderFormat(textWithoutMention);
-      if (detectedFormat) {
-        console.log(`🔍 [GROUP_MENTION] Detected order format: ${detectedFormat}, parsing...`);
-        // Continue to order parsing below (will use textWithoutMention)
-        message.text = textWithoutMention;
-      } else {
-        // Not an order, send help message
-        console.log(`💬 [GROUP_MENTION] Not an order format, sending help message`);
-        const helpMessage = 'Halo kak 😊 Ketik /pesan untuk format pesanan, /menu untuk daftar menu.';
-        const replyToId = message.message_id;
-        await sendTelegramMessage(chatId, helpMessage, null, replyToId);
-        return;
-      }
-    }
+    // Commands are allowed - will be processed below
   }
 
   try {
@@ -462,20 +442,20 @@ async function handleTelegramMessage(message) {
 
     // Handle bot commands (works in both private and group chats)
     if (message.text?.startsWith('/')) {
-      handleTelegramCommand(message);
+      await handleTelegramCommand(message);
       return;
     }
 
-    // Try to parse order from message FIRST (before menu/FAQ)
-    // This ensures orders are processed even if they contain FAQ keywords
-    // Works in both private and group chats
+    // Private chat only: Try to parse order from message (auto-parse)
+    // In groups, orders must come via /pesan command (privacy mode)
     let orderProcessed = false;
-    try {
-      // Detect format and parse
-      const detectedFormat = detectOrderFormat(message.text);
-      console.log(`🔍 [ORDER_PARSE] Detected format: ${detectedFormat || 'none'}`);
-      
-      const parsedOrder = parseOrderFromMessageAuto(message.text);
+    if (chatType === 'private') {
+      try {
+        // Detect format and parse
+        const detectedFormat = detectOrderFormat(message.text);
+        console.log(`🔍 [ORDER_PARSE] Private chat auto-parse - format: ${detectedFormat || 'none'}`);
+        
+        const parsedOrder = parseOrderFromMessageAuto(message.text);
       
       console.log(`🔍 [ORDER_PARSE] Parsed fields:`, {
         customer_name: parsedOrder.customer_name ? '✓' : '✗',
@@ -691,43 +671,46 @@ async function handleTelegramMessage(message) {
             `Mendapatkan info Dawet Kemayu Menteng dari: [Sumber]`;
           
           const fullMessage = incompleteMessage + formatTemplate;
-          const replyToId = message.chat.type !== 'private' ? message.message_id : null;
-          await sendTelegramMessage(message.chat.id, fullMessage, null, replyToId);
+          await sendTelegramMessage(message.chat.id, fullMessage);
           console.log('📤 [ORDER_HANDLER] Sent incomplete order guidance message');
           orderProcessed = true; // Mark as processed (even if incomplete)
           console.log(`✅ [ORDER_HANDLER] Incomplete order handled, orderProcessed=true, returning early`);
           return; // CRITICAL: Return immediately to prevent fall-through
         }
       }
-    } catch (error) {
-      // Check if this is a parse error (not an order) or a save error (order was parsed but save failed)
-      if (error.message && (
-        error.message.includes('Unable to parse range') ||
-        error.message.includes('Error saving') ||
-        error.message.includes('Error saving order') ||
-        error.message.includes('Error saving to')
-      )) {
-        // This is a save error - order was parsed correctly but save failed
-        console.error('❌ [ORDER_CREATE] Order was parsed but save failed:', error.message);
-        console.error('❌ [ORDER_CREATE] Stack:', error.stack);
-        
-        // Send error message to user
-        const errorMessage = '❌ Maaf, terjadi kesalahan saat menyimpan pesanan Anda. Silakan coba lagi atau hubungi admin.';
-        const replyToId = message.chat.type !== 'private' ? message.message_id : null;
-        await sendTelegramMessage(message.chat.id, errorMessage, null, replyToId);
-        orderProcessed = true; // Mark as processed to prevent fall-through
-        return; // Exit handler
-      } else {
-        // This is a parse error - not an order format, continue to other handlers
-        // But only log if orderProcessed is still false (meaning it's truly not an order)
-        if (!orderProcessed) {
-          console.log('⚠️ [ORDER_PARSE] Not an order format or parse error, checking other handlers...');
-          console.log('⚠️ [ORDER_PARSE] Error:', error.message);
-          console.log('⚠️ [ORDER_PARSE] Parse failed - will try other handlers (menu/FAQ/fallback)');
+      } catch (error) {
+        // Check if this is a parse error (not an order) or a save error (order was parsed but save failed)
+        if (error.message && (
+          error.message.includes('Unable to parse range') ||
+          error.message.includes('Error saving') ||
+          error.message.includes('Error saving order') ||
+          error.message.includes('Error saving to')
+        )) {
+          // This is a save error - order was parsed correctly but save failed
+          console.error('❌ [ORDER_CREATE] Order was parsed but save failed:', error.message);
+          console.error('❌ [ORDER_CREATE] Stack:', error.stack);
+          
+          // Send error message to user
+          const errorMessage = '❌ Maaf, terjadi kesalahan saat menyimpan pesanan Anda. Silakan coba lagi atau hubungi admin.';
+          await sendTelegramMessage(message.chat.id, errorMessage);
+          orderProcessed = true; // Mark as processed to prevent fall-through
+          return; // Exit handler
         } else {
-          console.log('✅ [ORDER_PARSE] Order was processed despite error, orderProcessed=true');
+          // This is a parse error - not an order format, continue to other handlers
+          // But only log if orderProcessed is still false (meaning it's truly not an order)
+          if (!orderProcessed) {
+            console.log('⚠️ [ORDER_PARSE] Not an order format or parse error, checking other handlers...');
+            console.log('⚠️ [ORDER_PARSE] Error:', error.message);
+            console.log('⚠️ [ORDER_PARSE] Parse failed - will try other handlers (menu/FAQ/fallback)');
+          } else {
+            console.log('✅ [ORDER_PARSE] Order was processed despite error, orderProcessed=true');
+          }
         }
       }
+    } else {
+      // Group/supergroup: non-command messages are already filtered out above
+      // This code path should not be reached, but log for safety
+      console.log(`⏸️ [ORDER_PARSE] Skipping auto-parse in ${chatType} (orders must use /pesan command)`);
     }
 
     // CRITICAL: Return early if order was processed to prevent fall-through to menu/FAQ
@@ -1371,38 +1354,70 @@ function normalizeCommand(commandText) {
 }
 
 /**
+ * Extract command payload (text after command line)
+ * For commands like "/pesan@bot\nNama Pemesan: ...", extracts everything after first newline
+ * @param {string} messageText - Full message text
+ * @returns {string} Payload text (everything after command line)
+ */
+function extractCommandPayload(messageText) {
+  if (!messageText) return '';
+  
+  // Find first newline after command
+  const newlineIndex = messageText.indexOf('\n');
+  if (newlineIndex >= 0) {
+    return messageText.substring(newlineIndex + 1).trim();
+  }
+  
+  // If no newline, check if there's text after command token on same line
+  // Pattern: /command@bot text here
+  const commandMatch = messageText.match(/^\/\w+(?:@\w+)?\s+(.+)$/);
+  if (commandMatch && commandMatch[1]) {
+    return commandMatch[1].trim();
+  }
+  
+  return '';
+}
+
+/**
  * Parse command and arguments from message text
  * @param {string} messageText - Full message text
- * @returns {{command: string, args: string[]}} Parsed command and arguments
+ * @returns {{command: string, args: string[], payload: string}} Parsed command, arguments, and payload
  */
 function parseCommand(messageText) {
-  if (!messageText) return { command: '', args: [] };
+  if (!messageText) return { command: '', args: [], payload: '' };
   
-  // Remove bot username suffix
+  // Extract payload (text after command line)
+  const payload = extractCommandPayload(messageText);
+  
+  // Remove bot username suffix for command parsing
   let text = messageText.replace(/@\w+/g, '').trim();
   
+  // Get command line (first line only)
+  const firstLine = text.split('\n')[0] || text;
+  
   // Split by spaces, but preserve quoted strings
-  const parts = text.split(/\s+/);
+  const parts = firstLine.split(/\s+/);
   const command = parts[0] || '';
   const args = parts.slice(1).filter(arg => arg.trim().length > 0);
   
-  return { command, args };
+  return { command, args, payload };
 }
 
 /**
  * Handle Telegram bot commands (/start, /help, etc.)
  */
-function handleTelegramCommand(message) {
+async function handleTelegramCommand(message) {
   const chatId = message.chat.id;
   const userId = message.from?.id;
+  const chatType = message.chat?.type || 'unknown';
   const messageText = message.text || '';
   
-  // Parse command
-  const { command: rawCommand, args } = parseCommand(messageText);
+  // Parse command with payload extraction
+  const { command: rawCommand, args, payload } = parseCommand(messageText);
   const normalizedCommand = normalizeCommand(rawCommand);
   
   // Log command received
-  console.log(`🤖 [COMMAND] Received - command: "${rawCommand}", normalized: "${normalizedCommand}", args: [${args.join(', ')}], chatId: ${chatId}, userId: ${userId}`);
+  console.log(`🤖 [COMMAND] Received - command: "${rawCommand}", normalized: "${normalizedCommand}", args: [${args.join(', ')}], payloadLength: ${payload.length}, chatType: ${chatType}, chatId: ${chatId}, userId: ${userId}`);
   
   // If no valid command, handle as unknown
   if (!normalizedCommand) {
@@ -1423,29 +1438,124 @@ function handleTelegramCommand(message) {
       );
       break;
     case '/pesan':
-      sendTelegramMessage(chatId,
-        '📝 Silakan kirim pesanan Anda dengan format berikut:\n\n' +
-        'Nama Pemesan:\n' +
-        'Nama Penerima:\n' +
-        'No HP Penerima:\n' +
-        'Alamat Penerima:\n\n' +
-        'Nama Event (jika ada):\n' +
-        'Durasi Event (dalam jam):\n\n' +
-        'Tanggal Event: DD/MM/YYYY\n' +
-        'Waktu Kirim (jam): HH:MM\n\n' +
-        'Detail Pesanan:\n' +
-        '[Jumlah] x [Nama Item]\n' +
-        '[Jumlah] x [Nama Item]\n\n' +
-        'Packaging Styrofoam\n' +
-        '(1 box Rp40.000 untuk 50 cup): YA / TIDAK\n\n' +
-        'Metode Pengiriman:\n' +
-        'Pickup / GrabExpress / Custom\n\n' +
-        'Biaya Pengiriman (Rp):\n' +
-        '(diisi oleh Admin)\n\n' +
-        'Notes:\n\n' +
-        'Mendapatkan info Dawet Kemayu Menteng dari:\n' +
-        'Teman / Instagram / Facebook / TikTok / Lainnya'
-      );
+      // Check if payload exists (order form in same message)
+      if (payload && payload.trim().length > 0) {
+        console.log(`🔍 [PESAN] Payload detected (${payload.length} chars), parsing order...`);
+        
+        // Parse order from payload
+        const detectedFormat = detectOrderFormat(payload);
+        console.log(`🔍 [PESAN] Detected format: ${detectedFormat || 'none'}`);
+        
+        const parsedOrder = parseOrderFromMessageAuto(payload);
+        
+        // Get price list to check if notes are actually items
+        const priceList = await getPriceList();
+        
+        // Move price list items from notes to items
+        const { items, notes } = separateItemsFromNotes(parsedOrder.items, parsedOrder.notes, priceList);
+        parsedOrder.items = items;
+        parsedOrder.notes = notes;
+        
+        const validation = validateOrder(parsedOrder);
+        
+        if (validation.valid) {
+          console.log(`✅ [PESAN] Valid order detected, processing...`);
+          console.log(`📊 [PESAN] Parsed items count: ${parsedOrder.items.length}`);
+          
+          // Process order (similar to handleTelegramMessage order processing)
+          const conversation = await getOrCreateConversation(
+            chatId,
+            message.from?.first_name || message.from?.username || 'Unknown',
+            userId
+          );
+          
+          const orderId = await generateOrderId();
+          const orderData = {
+            id: orderId,
+            conversation_id: conversation.id,
+            customer_name: parsedOrder.customer_name,
+            phone_number: parsedOrder.phone_number,
+            address: parsedOrder.address,
+            event_name: parsedOrder.event_name,
+            event_duration: parsedOrder.event_duration,
+            event_date: parsedOrder.event_date,
+            delivery_time: parsedOrder.delivery_time,
+            items: parsedOrder.items,
+            notes: parsedOrder.notes,
+            status: 'pending',
+            created_at: new Date().toISOString(),
+          };
+          
+          // Check if order date is in the future
+          const isFuture = isFutureDate(orderData.event_date);
+          
+          if (isFuture) {
+            orderData.status = 'waiting';
+            await saveToWaitingList(orderData);
+            orderData.status = 'pending_confirmation';
+            await saveOrder(orderData);
+            
+            const priceList = await getPriceList();
+            const orderSummary = formatOrderSummary(orderData);
+            const calculation = calculateOrderTotal(orderData.items, priceList);
+            
+            let confirmationText = `📋 **KONFIRMASI PESANAN**\n\n`;
+            confirmationText += orderSummary;
+            confirmationText += `\n\nApakah pesanan ini sudah benar?`;
+            
+            const replyMarkup = {
+              inline_keyboard: [
+                [
+                  { text: '✅ Ya, Benar', callback_data: `confirm_order_${orderData.id}` },
+                  { text: '❌ Tidak, Perbaiki', callback_data: `cancel_order_${orderData.id}` }
+                ]
+              ]
+            };
+            
+            const replyToId = chatType !== 'private' ? message.message_id : null;
+            await sendTelegramMessage(chatId, confirmationText, replyMarkup, replyToId);
+          } else {
+            // Save order to Google Sheets with status "pending_confirmation" (current date or past)
+            orderData.status = 'pending_confirmation';
+            await saveOrder(orderData);
+            
+            const priceList = await getPriceList();
+            const orderSummary = formatOrderSummary(orderData);
+            const calculation = calculateOrderTotal(orderData.items, priceList);
+            
+            let confirmationText = `📋 **KONFIRMASI PESANAN**\n\n`;
+            confirmationText += orderSummary;
+            confirmationText += `\n\nApakah pesanan ini sudah benar?`;
+            
+            const replyMarkup = {
+              inline_keyboard: [
+                [
+                  { text: '✅ Ya, Benar', callback_data: `confirm_order_${orderData.id}` },
+                  { text: '❌ Tidak, Perbaiki', callback_data: `cancel_order_${orderData.id}` }
+                ]
+              ]
+            };
+            
+            const replyToId = chatType !== 'private' ? message.message_id : null;
+            await sendTelegramMessage(chatId, confirmationText, replyMarkup, replyToId);
+          }
+        } else {
+          // Invalid order - send error with missing fields
+          console.log(`⚠️ [PESAN] Order validation failed:`, validation.errors);
+          const errorMessage = `❌ **Format pesanan belum lengkap**\n\n` +
+            `Kesalahan:\n${validation.errors.map(e => `• ${e}`).join('\n')}\n\n` +
+            `Silakan perbaiki dan coba lagi.\n` +
+            `Ketik /help untuk melihat template lengkap.`;
+          const replyToId = chatType !== 'private' ? message.message_id : null;
+          await sendTelegramMessage(chatId, errorMessage, null, replyToId);
+        }
+      } else {
+        // No payload - send instruction
+        const instruction = chatType === 'private' 
+          ? 'Silakan paste format pesanan yang sudah diisi ya kak 😊\n(Template ada di /help)'
+          : 'Silakan kirim /pesan@dawetkemayumenteng_bot + format pesanan dalam 1 pesan ya kak 😊 (template di /help).';
+        await sendTelegramMessage(chatId, instruction);
+      }
       break;
     case '/menu':
       formatMenuMessage().then(menu => {
