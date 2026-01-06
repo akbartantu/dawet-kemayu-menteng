@@ -155,11 +155,13 @@ export function getUnitPriceFromPriceList(itemName, priceList) {
   }
   
   const normalizedItemName = normalizeProductName(itemName);
+  console.log(`🔍 [PRICE] Looking up price for item: "${itemName}" (normalized: "${normalizedItemName}")`);
   
   // Strategy A: Exact match on normalized name
   for (const [priceListKey, price] of Object.entries(priceList)) {
     const normalizedKey = normalizeProductName(priceListKey);
     if (normalizedKey === normalizedItemName) {
+      console.log(`✅ [PRICE] Exact match found: "${priceListKey}" -> ${price}`);
       return price;
     }
   }
@@ -192,6 +194,7 @@ export function getUnitPriceFromPriceList(itemName, priceList) {
       }
       
       if (matches && normalizedKey.includes('dawet')) {
+        console.log(`✅ [PRICE] Fuzzy match found: "${priceListKey}" -> ${price}`);
         return price;
       }
     }
@@ -203,11 +206,13 @@ export function getUnitPriceFromPriceList(itemName, priceList) {
     if (parsed.base) {
       const basePrice = priceList[parsed.base] || null;
       if (basePrice) {
+        console.log(`✅ [PRICE] Found base price via parsing: "${parsed.base}" -> ${basePrice}`);
         // Add topping prices if any
         let totalPrice = basePrice;
         for (const topping of parsed.toppings) {
           const toppingPrice = priceList[topping] || 0;
           if (toppingPrice > 0) {
+            console.log(`🔍 [PRICE] Found topping price: "${topping}" -> ${toppingPrice}`);
             totalPrice += toppingPrice;
           }
         }
@@ -216,8 +221,10 @@ export function getUnitPriceFromPriceList(itemName, priceList) {
     }
   } catch (error) {
     // Parsing failed, continue to return null
+    console.warn(`⚠️ [PRICE] Parsing failed for "${itemName}":`, error.message);
   }
   
+  console.warn(`⚠️ [PRICE] Not found for: "${normalizedItemName}" (original: "${itemName}")`);
   return null;
 }
 
@@ -229,6 +236,7 @@ export function calculateOrderTotal(items, priceList) {
   const itemDetails = [];
   
   for (const item of items) {
+    console.log(`🔍 [PRICE] Processing item: ${item.quantity}x ${item.name}`);
     
     // Use improved price lookup with normalization
     let unitPrice = getUnitPriceFromPriceList(item.name, priceList);
@@ -252,6 +260,7 @@ export function calculateOrderTotal(items, priceList) {
           toppingPrices = parsed.toppings.map(topping => {
             const toppingPrice = priceList[topping] || 0;
             if (toppingPrice > 0) {
+              console.log(`🔍 [PRICE] Found topping price: "${topping}" -> ${toppingPrice}`);
             }
             return toppingPrice;
           });
@@ -267,7 +276,9 @@ export function calculateOrderTotal(items, priceList) {
     let itemTotal = 0;
     if (unitPrice !== null && unitPrice > 0) {
       itemTotal = unitPrice * item.quantity;
+      console.log(`✅ [PRICE] Item: ${item.quantity}x ${item.name} - Unit: ${unitPrice}, Total: ${itemTotal}`);
     } else {
+      console.warn(`⚠️ [PRICE] Price not found for item: "${item.name}" - will show "Harga belum tersedia"`);
     }
     
     subtotal += itemTotal;
@@ -374,6 +385,7 @@ export function normalizeDeliveryTime(timeStr) {
   // Format as HH:MM
   const formatted = `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`;
   
+  console.log(`✅ [NORMALIZE_DELIVERY_TIME] "${trimmed}" → "${formatted}"`);
   return formatted;
 }
 
@@ -393,6 +405,7 @@ function formatTime(timeStr) {
     return normalized || '-';
   } catch (error) {
     // If normalization fails (invalid format), return "-" instead of crashing
+    console.warn(`⚠️ [FORMAT_TIME] Failed to normalize delivery_time "${timeStr}":`, error.message);
     return '-';
   }
 }
@@ -444,7 +457,14 @@ export function formatInvoice(order, priceList) {
     }
   }
   
-  const shippingPrice = order.delivery_fee || 0;
+  // Parse delivery_fee (may be stored as string in Google Sheets)
+  let shippingPrice = 0;
+  if (order.delivery_fee !== undefined && order.delivery_fee !== null && order.delivery_fee !== '') {
+    const parsedFee = parseFloat(order.delivery_fee);
+    if (!isNaN(parsedFee) && parsedFee >= 0) {
+      shippingPrice = parsedFee;
+    }
+  }
   // Use total_amount (canonical) with fallback to final_total (legacy) or calculated
   const totalAmount = order.total_amount || order.final_total || subtotal + packagingPrice + shippingPrice;
   const dpMinimum = calculateMinDP(totalAmount);
@@ -466,6 +486,7 @@ export function formatInvoice(order, priceList) {
       itemList += `${detail.quantity}x ${detail.name} - Rp${formatPrice(detail.itemTotal)}\n`;
     } else {
       itemList += `${detail.quantity}x ${detail.name} - Harga belum tersedia\n`;
+      console.warn(`⚠️ [INVOICE] Item "${detail.name}" has no price - showing "Harga belum tersedia"`);
     }
   });
   
@@ -543,6 +564,7 @@ export function separateItemsFromNotes(items, notes, priceList) {
           quantity: 1,
           name: priceListKey, // Use the exact name from price list
         });
+        console.log(`📦 Moved "${note}" from notes to items (exact match: "${priceListKey}")`);
         found = true;
         break;
       }
@@ -576,6 +598,7 @@ export function separateItemsFromNotes(items, notes, priceList) {
             quantity: 1,
             name: priceListKey,
           });
+          console.log(`📦 Moved "${note}" from notes to items (match: "${priceListKey}")`);
           found = true;
           break;
         }
@@ -585,6 +608,7 @@ export function separateItemsFromNotes(items, notes, priceList) {
     if (!found) {
       // Keep as note
       finalNotes.push(note);
+      console.log(`📝 Keeping "${note}" as note (not found in price list)`);
     }
   }
   
