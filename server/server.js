@@ -34,6 +34,8 @@ import {
 } from './order-status-notifications.js';
 import {
   parseOrderFromMessage,
+  parseOrderFromMessageAuto,
+  detectOrderFormat,
   validateOrder,
   formatOrderSummary,
 } from './order-parser.js';
@@ -126,6 +128,8 @@ const processedConfirmations = new Set();
  * Telegram sends messages to this endpoint when customers message the bot
  */
 app.post('/api/webhooks/telegram', (req, res) => {
+  console.log('📨 Received Telegram webhook:', JSON.stringify(req.body, null, 2));
+
   // Always respond 200 OK to Telegram immediately
   res.status(200).send('OK');
 
@@ -134,16 +138,18 @@ app.post('/api/webhooks/telegram', (req, res) => {
     const update = req.body;
 
     // Telegram sends updates in this structure
+    // Handle both private messages and group messages
     if (update.message) {
+      // Process messages from all chat types: private, group, supergroup
       handleTelegramMessage(update.message);
     }
     
-    // Handle callback queries (button clicks)
+    // Handle callback queries (button clicks) - works in all chat types
     if (update.callback_query) {
       handleCallbackQuery(update.callback_query);
     }
   } catch (error) {
-    // Error processing webhook
+    console.error('❌ Error processing Telegram webhook:', error);
   }
 });
 
@@ -171,65 +177,14 @@ async function deleteWebhook() {
     const data = await response.json();
 
     if (data.ok) {
+      console.log('✅ Webhook removed (required for polling mode)');
       webhookDeleted = true;
     } else {
+      console.log('ℹ️  No webhook to remove (or already removed)');
       webhookDeleted = true;
     }
   } catch (error) {
-  }
-}
-
-/**
- * Set webhook URL (for production)
- * Registers the webhook URL with Telegram so messages are sent to our server
- */
-async function setWebhook() {
-  const botToken = process.env.TELEGRAM_BOT_TOKEN;
-  
-  if (!botToken) {
-    return;
-  }
-
-  // Get webhook URL from environment variable or construct from Render URL
-  let webhookUrl = process.env.WEBHOOK_URL;
-  
-  // If WEBHOOK_URL not set, try to get from Render's RENDER_EXTERNAL_URL
-  if (!webhookUrl && process.env.RENDER_EXTERNAL_URL) {
-    webhookUrl = process.env.RENDER_EXTERNAL_URL;
-  }
-  
-  // If still not set, try to construct from common Render pattern
-  if (!webhookUrl && process.env.RENDER_SERVICE_NAME) {
-    webhookUrl = `https://${process.env.RENDER_SERVICE_NAME}.onrender.com`;
-  }
-
-  if (!webhookUrl) {
-    // Cannot set webhook without URL
-    return;
-  }
-
-  try {
-    // Check if WEBHOOK_URL already includes the path
-    let webhookPath;
-    if (webhookUrl.includes('/api/webhooks/telegram')) {
-      // Already has the full path, use as-is
-      webhookPath = webhookUrl;
-    } else {
-      // Just the base URL, add the path
-      webhookPath = `${webhookUrl}/api/webhooks/telegram`;
-    }
-    
-    const url = `${TELEGRAM_API_BASE}${botToken}/setWebhook?url=${encodeURIComponent(webhookPath)}&drop_pending_updates=true`;
-    const response = await fetch(url);
-    const data = await response.json();
-
-    if (data.ok) {
-      // Webhook set successfully
-    } else {
-      // Webhook setup failed - check data.description for error
-    }
-  } catch (error) {
-    // Error setting webhook
+    console.log('⚠️  Could not check/remove webhook:', error.message);
   }
 }
 
@@ -241,9 +196,11 @@ async function startPolling() {
   const botToken = process.env.TELEGRAM_BOT_TOKEN;
   
   if (!botToken) {
+    console.log('⚠️  TELEGRAM_BOT_TOKEN not set. Polling disabled.');
     return;
   }
 
+  console.log('🔄 Starting Telegram polling (local development mode)...');
   
   // First, remove any existing webhook (required!)
   await deleteWebhook();
@@ -260,6 +217,7 @@ async function startPolling() {
       if (!response.ok) {
         // Handle 409 error specifically (only log once, don't spam)
         if (response.status === 409 && !webhookDeleted) {
+          console.error('❌ Error 409: Webhook conflict. Removing webhook...');
           await deleteWebhook();
           await new Promise(resolve => setTimeout(resolve, 3000));
           return; // Will retry on next poll
@@ -269,12 +227,14 @@ async function startPolling() {
         }
         
         const errorText = await response.text();
+        console.error(`❌ Telegram API error ${response.status}:`, errorText.substring(0, 100));
         return;
       }
 
       const data = await response.json();
 
       if (!data.ok) {
+        console.error('❌ Telegram API returned error:', data.description);
         return;
       }
 
@@ -291,9 +251,11 @@ async function startPolling() {
         });
       }
     } catch (error) {
+      console.error('❌ Error polling Telegram:', error.message);
     }
   }, 2000); // Poll every 2 seconds
 
+  console.log('✅ Polling started! Bot will check for new messages every 2 seconds.');
 }
 
 /**
@@ -303,6 +265,7 @@ function stopPolling() {
   if (pollingInterval) {
     clearInterval(pollingInterval);
     pollingInterval = null;
+    console.log('🛑 Polling stopped');
   }
 }
 
@@ -318,6 +281,7 @@ app.post('/api/messages/whatsapp-manual', async (req, res) => {
       return res.status(400).json({ error: 'Missing "from" or "text" field' });
     }
 
+    console.log('💬 Manual WhatsApp message input:', { from, text });
 
     // Create conversation ID from phone number
     const conversationId = `conv_whatsapp_${from.replace(/\D/g, '')}`;
@@ -336,6 +300,7 @@ app.post('/api/messages/whatsapp-manual', async (req, res) => {
     };
 
     await saveMessage(messageData);
+    console.log('💾 WhatsApp message saved to storage');
 
     res.json({
       success: true,
@@ -343,6 +308,7 @@ app.post('/api/messages/whatsapp-manual', async (req, res) => {
       message: 'WhatsApp message stored successfully',
     });
   } catch (error) {
+    console.error('❌ Error storing manual WhatsApp message:', error);
     res.status(500).json({ error: 'Failed to store message', details: error.message });
   }
 });
@@ -351,23 +317,41 @@ app.post('/api/messages/whatsapp-manual', async (req, res) => {
  * Handle incoming Telegram message from customer
  */
 async function handleTelegramMessage(message) {
+  const chatType = message.chat?.type || 'unknown';
+  const chatId = message.chat.id;
+  const userId = message.from?.id;
+  const userName = message.from?.first_name || message.from?.username || 'Unknown';
+  
+  console.log('💬 New Telegram message received:', {
+    from: userName,
+    userId: userId,
+    chatId: chatId,
+    chatType: chatType,
+    text: message.text?.substring(0, 100) || '',
+    messageId: message.message_id,
+  });
+
+  // Log warning if bot might not receive plain text in groups (privacy mode)
+  if (chatType !== 'private' && !message.text?.startsWith('/')) {
+    console.log(`ℹ️ [GROUP_MESSAGE] Received non-command message in ${chatType}. If bot doesn't respond, check Telegram privacy settings.`);
+  }
 
   try {
     // Get or create conversation
     const conversation = await getOrCreateConversation(
-      message.chat.id,
-      message.from?.first_name || message.from?.username,
-      message.from?.id
+      chatId,
+      userName,
+      userId
     );
 
     // Prepare message data
     const messageData = {
       id: `telegram_${message.message_id}`,
       conversationId: conversation.id,
-      telegramChatId: message.chat.id,
-      from: String(message.from?.id),
-      fromName: message.from?.first_name || message.from?.username || 'Unknown',
-      fromId: message.from?.id,
+      telegramChatId: chatId,
+      from: String(userId),
+      fromName: userName,
+      fromId: userId,
       text: message.text || '',
       messageType: 'text',
       direction: 'inbound',
@@ -378,8 +362,9 @@ async function handleTelegramMessage(message) {
 
     // Save to storage
     await saveMessage(messageData);
+    console.log('💾 Telegram message saved to storage');
 
-    // Handle bot commands
+    // Handle bot commands (works in both private and group chats)
     if (message.text?.startsWith('/')) {
       handleTelegramCommand(message);
       return;
@@ -387,9 +372,23 @@ async function handleTelegramMessage(message) {
 
     // Try to parse order from message FIRST (before menu/FAQ)
     // This ensures orders are processed even if they contain FAQ keywords
+    // Works in both private and group chats
     let orderProcessed = false;
     try {
-      const parsedOrder = parseOrderFromMessage(message.text);
+      // Detect format and parse
+      const detectedFormat = detectOrderFormat(message.text);
+      console.log(`🔍 [ORDER_PARSE] Detected format: ${detectedFormat || 'none'}`);
+      
+      const parsedOrder = parseOrderFromMessageAuto(message.text);
+      
+      console.log(`🔍 [ORDER_PARSE] Parsed fields:`, {
+        customer_name: parsedOrder.customer_name ? '✓' : '✗',
+        phone_number: parsedOrder.phone_number ? '✓' : '✗',
+        address: parsedOrder.address ? '✓' : '✗',
+        items_count: parsedOrder.items.length,
+        event_date: parsedOrder.event_date ? '✓' : '✗',
+        delivery_time: parsedOrder.delivery_time ? '✓' : '✗',
+      });
       
       // Get price list to check if notes are actually items
       const priceList = await getPriceList();
@@ -402,15 +401,22 @@ async function handleTelegramMessage(message) {
       const validation = validateOrder(parsedOrder);
 
       if (validation.valid) {
+        console.log(`✅ [ORDER_PARSE] Valid order detected in message`);
+        console.log('✅ [ORDER_PARSE] Order detected in message!', {
+          customer: parsedOrder.customer_name,
+          items: parsedOrder.items.length,
+        });
         
         // Mark as processed IMMEDIATELY to prevent fall-through
         orderProcessed = true;
+        console.log(`✅ [ORDER_HANDLER] Order processed, setting orderProcessed=true, will return early`);
 
         // Generate order ID (MUST be done before any operations)
         const orderId = await generateOrderId();
         if (!orderId) {
           throw new Error('Failed to generate order ID');
         }
+        console.log(`🔍 [ORDER_CREATE] Generated Order ID: ${orderId}`);
         
         // Create order
         const orderData = {
@@ -439,6 +445,7 @@ async function handleTelegramMessage(message) {
           try {
             await saveToWaitingList(orderData);
           } catch (error) {
+            console.error('❌ [ORDER_CREATE] Error saving to WaitingList:', error.message);
             throw error; // Re-throw to be caught by outer handler
           }
           
@@ -447,6 +454,7 @@ async function handleTelegramMessage(message) {
           try {
             await saveOrder(orderData);
           } catch (error) {
+            console.error('❌ [ORDER_CREATE] Error saving to Orders:', error.message);
             throw error; // Re-throw to be caught by outer handler
           }
 
@@ -474,6 +482,7 @@ async function handleTelegramMessage(message) {
           await sendTelegramMessage(message.chat.id, confirmationText, replyMarkup);
           // orderProcessed already set above, but ensure it's still true
           orderProcessed = true;
+          console.log(`✅ [ORDER_HANDLER] Order confirmation sent (future date), orderProcessed=true, returning early`);
           return; // CRITICAL: Return immediately to prevent fall-through
         } else {
           // Save order to Google Sheets with status "pending_confirmation" (current date or past)
@@ -481,12 +490,14 @@ async function handleTelegramMessage(message) {
           try {
             await saveOrder(orderData);
           } catch (error) {
+            console.error('❌ [ORDER_CREATE] Error saving order:', error.message);
             throw error; // Re-throw to be caught by outer handler
           }
           
           // Create reminders for future orders (H-4, H-3, H-1)
           // Reminder creation is based ONLY on Event Date (not payment status, order status, etc.)
           if (orderData.event_date) {
+            console.log(`🔍 [ORDER_CREATE] Checking reminder creation - Order ID: ${orderData.id}, Event Date: ${orderData.event_date}`);
             
             // Normalize today for comparison
             const today = new Date();
@@ -500,22 +511,31 @@ async function handleTelegramMessage(message) {
               // Normalize event date to start of day
               eventDateParsed.setHours(0, 0, 0, 0);
               
+              console.log(`🔍 [ORDER_CREATE] Event date parsed: ${eventDateParsed.toISOString().split('T')[0]}, Today: ${today.toISOString().split('T')[0]}`);
               
               // STRICT comparison: eventDate > today (not >=)
               if (eventDateParsed > today) {
+                console.log(`✅ [ORDER_CREATE] Event date is in the future, creating reminders...`);
                 try {
                   const reminders = await createOrderReminders(orderData.id, orderData.event_date, orderData);
                   if (reminders.length > 0) {
+                    console.log(`✅ [ORDER_CREATE] Successfully created ${reminders.length} reminder(s) for order ${orderData.id}`);
                   } else {
+                    console.log(`⚠️ [ORDER_CREATE] No reminders created for order ${orderData.id} (check logs above for reason)`);
                   }
                 } catch (error) {
+                  console.error('❌ [ORDER_CREATE] Error creating reminders (non-critical):', error);
+                  console.error('❌ [ORDER_CREATE] Stack:', error.stack);
                   // Don't fail order creation if reminder creation fails
                 }
               } else {
+                console.log(`⚠️ [ORDER_CREATE] Event date is not in the future (${eventDateParsed.toISOString().split('T')[0]} <= ${today.toISOString().split('T')[0]}), skipping reminder creation`);
               }
             } else {
+              console.log(`⚠️ [ORDER_CREATE] Failed to parse event date: ${orderData.event_date}, skipping reminder creation`);
             }
           } else {
+            console.log(`⚠️ [ORDER_CREATE] No event date provided for order ${orderData.id}, skipping reminder creation`);
           }
 
           // Get price list and calculate order summary
@@ -539,21 +559,47 @@ async function handleTelegramMessage(message) {
           };
 
           // Send confirmation message with buttons
-          await sendTelegramMessage(message.chat.id, confirmationText, replyMarkup);
+          // Use reply_to_message_id for group chats to make it clear which order we're responding to
+          const replyToId = message.chat.type !== 'private' ? message.message_id : null;
+          await sendTelegramMessage(message.chat.id, confirmationText, replyMarkup, replyToId);
           // orderProcessed already set above, but ensure it's still true
           orderProcessed = true;
+          console.log(`✅ [ORDER_HANDLER] Order confirmation sent, orderProcessed=true, returning early`);
           return; // CRITICAL: Return immediately to prevent fall-through
         }
       } else {
         // Order format detected but incomplete
+        console.log('⚠️ Order format detected but incomplete:', validation.errors);
         
         // Always send helpful incomplete order message if it looks like an order attempt
         if (parsedOrder.customer_name || parsedOrder.phone_number || parsedOrder.items.length > 0) {
           const isEnglish = detectLanguage(message.text);
           const incompleteMessage = getIncompleteOrderMessage(validation.errors, isEnglish);
           
-          await sendTelegramMessage(message.chat.id, incompleteMessage);
+          // Include format template if parse failed
+          const formatTemplate = `\n\n📝 **Format Pesanan:**\n` +
+            `Nama Pemesan: [Nama]\n` +
+            `Nama Penerima: [Nama]\n` +
+            `No HP Penerima: [Nomor HP]\n` +
+            `Alamat Penerima: [Alamat lengkap]\n\n` +
+            `Nama Event (jika ada): -\n` +
+            `Durasi Event (dalam jam): -\n\n` +
+            `Tanggal Event: DD/MM/YYYY\n` +
+            `Waktu Kirim (jam): HH:MM\n\n` +
+            `Detail Pesanan:\n` +
+            `• [Jumlah] x [Nama Item]\n\n` +
+            `Packaging Styrofoam (1 box 40K untuk 50 cup): YA/TIDAK\n` +
+            `Metode pengiriman: Pickup/GrabExpress/Custom\n` +
+            `Biaya Pengiriman (Rp): [Nominal]\n` +
+            `Notes: [Catatan]\n\n` +
+            `Mendapatkan info Dawet Kemayu Menteng dari: [Sumber]`;
+          
+          const fullMessage = incompleteMessage + formatTemplate;
+          const replyToId = message.chat.type !== 'private' ? message.message_id : null;
+          await sendTelegramMessage(message.chat.id, fullMessage, null, replyToId);
+          console.log('📤 [ORDER_HANDLER] Sent incomplete order guidance message');
           orderProcessed = true; // Mark as processed (even if incomplete)
+          console.log(`✅ [ORDER_HANDLER] Incomplete order handled, orderProcessed=true, returning early`);
           return; // CRITICAL: Return immediately to prevent fall-through
         }
       }
@@ -566,23 +612,31 @@ async function handleTelegramMessage(message) {
         error.message.includes('Error saving to')
       )) {
         // This is a save error - order was parsed correctly but save failed
+        console.error('❌ [ORDER_CREATE] Order was parsed but save failed:', error.message);
+        console.error('❌ [ORDER_CREATE] Stack:', error.stack);
         
         // Send error message to user
         const errorMessage = '❌ Maaf, terjadi kesalahan saat menyimpan pesanan Anda. Silakan coba lagi atau hubungi admin.';
-        await sendTelegramMessage(message.chat.id, errorMessage);
+        const replyToId = message.chat.type !== 'private' ? message.message_id : null;
+        await sendTelegramMessage(message.chat.id, errorMessage, null, replyToId);
         orderProcessed = true; // Mark as processed to prevent fall-through
         return; // Exit handler
       } else {
         // This is a parse error - not an order format, continue to other handlers
         // But only log if orderProcessed is still false (meaning it's truly not an order)
         if (!orderProcessed) {
+          console.log('⚠️ [ORDER_PARSE] Not an order format or parse error, checking other handlers...');
+          console.log('⚠️ [ORDER_PARSE] Error:', error.message);
+          console.log('⚠️ [ORDER_PARSE] Parse failed - will try other handlers (menu/FAQ/fallback)');
         } else {
+          console.log('✅ [ORDER_PARSE] Order was processed despite error, orderProcessed=true');
         }
       }
     }
 
     // CRITICAL: Return early if order was processed to prevent fall-through to menu/FAQ
     if (orderProcessed) {
+      console.log('✅ [ORDER_PARSE] Order processed, skipping menu/FAQ handlers');
       return; // Exit handler to prevent extra messages
     }
 
@@ -603,17 +657,22 @@ async function handleTelegramMessage(message) {
       // Handle menu request
       if (isMenuRequest(message.text)) {
         const menuMessage = await formatMenuMessage();
-        await sendTelegramMessage(message.chat.id, menuMessage);
+        const replyToId = message.chat.type !== 'private' ? message.message_id : null;
+        await sendTelegramMessage(message.chat.id, menuMessage, null, replyToId);
         return;
       }
 
       // Handle FAQ questions (ONLY if not an order)
       // Double-check: if orderProcessed is true, skip FAQ
       if (!orderProcessed && isFAQQuestion(message.text)) {
+        console.log(`🔍 [FAQ_HANDLER] FAQ question detected: ${message.text.substring(0, 50)}...`);
         const faqAnswer = getFAQAnswer(message.text);
-        await sendTelegramMessage(message.chat.id, faqAnswer);
+        const replyToId = message.chat.type !== 'private' ? message.message_id : null;
+        await sendTelegramMessage(message.chat.id, faqAnswer, null, replyToId);
+        console.log(`📤 [FAQ_HANDLER] FAQ answer sent`);
         return;
       } else if (orderProcessed) {
+        console.log(`⏸️ [FAQ_HANDLER] Skipped because order was processed`);
       }
       
       // Fallback: Send friendly message for unhandled messages (NEVER send location)
@@ -621,14 +680,19 @@ async function handleTelegramMessage(message) {
       if (!orderProcessed && canSendFallback(message.chat.id)) {
         const isEnglish = detectLanguage(message.text);
         const fallbackMessage = getFallbackMessage(isEnglish);
+        const replyToId = message.chat.type !== 'private' ? message.message_id : null;
         
-        await sendTelegramMessage(message.chat.id, fallbackMessage);
+        await sendTelegramMessage(message.chat.id, fallbackMessage, null, replyToId);
         markFallbackSent(message.chat.id);
+        console.log('📤 [FALLBACK] Sent fallback message to user (no location)');
       } else if (orderProcessed) {
+        console.log('⏸️ [FALLBACK] Skipped because order was processed');
       } else {
+        console.log('⏸️ [FALLBACK] Skipped (cooldown active)');
       }
     }
   } catch (error) {
+    console.error('❌ Error handling Telegram message:', error);
   }
 }
 
@@ -646,6 +710,7 @@ setInterval(() => {
   // In production, you might want to track timestamps
   if (before > 1000) {
     processedCallbacks.clear();
+    console.log(`🧹 [CALLBACK] Cleaned up processed callbacks cache`);
   }
 }, CALLBACK_CLEANUP_INTERVAL);
 
@@ -654,10 +719,13 @@ async function handleCallbackQuery(callbackQuery) {
   const chatId = message.chat.id;
   const messageId = message.message_id;
 
+  console.log('🔘 [CALLBACK] Callback query received:', data);
+  console.log('🔘 [CALLBACK] Chat ID:', chatId, 'Message ID:', messageId, 'Callback ID:', callbackId);
 
   // Check if this callback was already processed (prevent Telegram retries)
   const callbackKey = `${callbackId}_${data}`;
   if (processedCallbacks.has(callbackKey)) {
+    console.log(`⚠️ [CALLBACK] Callback ${callbackId} already processed, ignoring duplicate`);
     // Still answer the callback to stop Telegram retry
     await answerCallbackQuery(callbackId);
     return;
@@ -667,57 +735,46 @@ async function handleCallbackQuery(callbackQuery) {
   processedCallbacks.add(callbackKey);
 
   try {
+    // Answer callback query IMMEDIATELY to stop Telegram retry
+    await answerCallbackQuery(callbackId);
+    console.log(`✅ [CALLBACK] Answered callback query ${callbackId} immediately`);
+
     if (data.startsWith('confirm_order_')) {
       const orderId = data.replace('confirm_order_', '');
-      
-      // Answer callback query with loading message
-      await answerCallbackQuery(callbackId, '⏳ Memproses konfirmasi...');
+      console.log('🔘 [CALLBACK] Processing order confirmation for:', orderId);
       
       // Remove inline keyboard to prevent double-click
       try {
         await editMessageReplyMarkup(chatId, messageId, null);
+        console.log(`✅ [CALLBACK] Removed inline keyboard for order ${orderId}`);
       } catch (error) {
-        // Non-critical error, continue
+        console.warn(`⚠️ [CALLBACK] Could not remove keyboard (non-critical):`, error.message);
       }
       
-      // Process confirmation (this may take time, but callback is already answered)
-      handleOrderConfirmation(chatId, orderId, messageId).catch(error => {
-        // Send error message to user if confirmation fails
-        sendTelegramMessage(chatId, '❌ Terjadi kesalahan saat mengkonfirmasi pesanan. Silakan coba lagi atau hubungi admin.').catch(() => {});
-      });
-      
+      await handleOrderConfirmation(chatId, orderId, messageId);
+      console.log(`✅ [CALLBACK] Order confirmation completed for ${orderId}, returning early`);
       return; // CRITICAL: Return early to prevent any other processing
     } else if (data.startsWith('cancel_order_')) {
       const orderId = data.replace('cancel_order_', '');
-      
-      // Answer callback query with loading message
-      await answerCallbackQuery(callbackId, '⏳ Membatalkan pesanan...');
+      console.log('🔘 [CALLBACK] Processing order cancellation for:', orderId);
       
       // Remove inline keyboard
       try {
         await editMessageReplyMarkup(chatId, messageId, null);
       } catch (error) {
-        // Non-critical error, continue
+        console.warn(`⚠️ [CALLBACK] Could not remove keyboard (non-critical):`, error.message);
       }
       
-      // Process cancellation (this may take time, but callback is already answered)
-      handleOrderCancellation(chatId, orderId, messageId).catch(error => {
-        // Send error message to user if cancellation fails
-        sendTelegramMessage(chatId, '❌ Terjadi kesalahan saat membatalkan pesanan. Silakan coba lagi atau hubungi admin.').catch(() => {});
-      });
-      
+      await handleOrderCancellation(chatId, orderId, messageId);
+      console.log(`✅ [CALLBACK] Order cancellation completed for ${orderId}, returning early`);
       return; // CRITICAL: Return early
     } else {
-      // Unknown callback data - answer with error message
-      await answerCallbackQuery(callbackId, '❌ Perintah tidak dikenali');
+      console.log('⚠️ [CALLBACK] Unknown callback data:', data);
     }
   } catch (error) {
-    // Answer callback even on error to stop Telegram retry
-    try {
-      await answerCallbackQuery(callbackId, '❌ Terjadi kesalahan');
-    } catch (answerError) {
-      // If even answering fails, there's nothing we can do
-    }
+    console.error('❌ [CALLBACK] Error handling callback query:', error);
+    console.error(`❌ [CALLBACK] Stack:`, error.stack);
+    // Don't send error message to user to avoid "null" issues
   }
 }
 
@@ -748,6 +805,7 @@ async function answerCallbackQuery(callbackQueryId, text = null) {
       body: JSON.stringify(payload),
     });
   } catch (error) {
+    console.error('❌ Error answering callback query:', error);
   }
 }
 
@@ -771,15 +829,18 @@ function acquireOrderLock(orderId) {
   if (existingLock) {
     // Check if lock expired
     if (now - existingLock.timestamp < LOCK_TTL_MS) {
+      console.log(`🔒 [ORDER_LOCK] Order ${orderId} is already being processed (locked ${Math.floor((now - existingLock.timestamp) / 1000)}s ago)`);
       return false; // Lock still active
     } else {
       // Lock expired, remove it
       orderFinalizationLocks.delete(orderId);
+      console.log(`🔓 [ORDER_LOCK] Lock for order ${orderId} expired, removing`);
     }
   }
   
   // Acquire new lock
   orderFinalizationLocks.set(orderId, { timestamp: now });
+  console.log(`🔒 [ORDER_LOCK] Lock acquired for order ${orderId}`);
   return true;
 }
 
@@ -789,6 +850,7 @@ function acquireOrderLock(orderId) {
  */
 function releaseOrderLock(orderId) {
   orderFinalizationLocks.delete(orderId);
+  console.log(`🔓 [ORDER_LOCK] Lock released for order ${orderId}`);
 }
 
 /**
@@ -804,6 +866,7 @@ function cleanupExpiredLocks() {
     }
   }
   if (cleaned > 0) {
+    console.log(`🧹 [ORDER_LOCK] Cleaned up ${cleaned} expired lock(s)`);
   }
 }
 
@@ -818,15 +881,18 @@ setInterval(cleanupExpiredLocks, 5 * 60 * 1000);
  * @returns {Object} Finalized order data or null if not found/already confirmed
  */
 async function finalizeOrder(orderId) {
+  console.log(`🔍 [FINALIZE_ORDER] Starting finalization for order: ${orderId}`);
   
   // Acquire lock to prevent concurrent processing
   if (!acquireOrderLock(orderId)) {
+    console.log(`⚠️ [FINALIZE_ORDER] Order ${orderId} is already being processed, skipping duplicate finalization`);
     // Return existing order if available
     try {
       const { getOrderById } = await import('./google-sheets.js');
       const existingOrder = await getOrderById(orderId);
       return existingOrder;
     } catch (error) {
+      console.error(`❌ [FINALIZE_ORDER] Error getting existing order:`, error.message);
       return null;
     }
   }
@@ -845,14 +911,17 @@ async function finalizeOrder(orderId) {
     }
 
     if (!order) {
+      console.log(`❌ [FINALIZE_ORDER] Order ${orderId} not found in Orders or WaitingList`);
       return null;
     }
 
     // Check if order is already confirmed (idempotency check)
     if (order.status === 'confirmed') {
+      console.log(`⚠️ [FINALIZE_ORDER] Order ${orderId} is already confirmed, skipping duplicate finalization`);
       return order; // Return existing order
     }
 
+    console.log(`✅ [FINALIZE_ORDER] Order ${orderId} found, status: ${order.status}, isWaitingList: ${isWaitingListOrder}`);
 
     // Normalize event_date to YYYY-MM-DD format before finalizing
     const { normalizeEventDate } = await import('./date-utils.js');
@@ -861,8 +930,10 @@ async function finalizeOrder(orderId) {
         const originalEventDate = order.event_date;
         order.event_date = normalizeEventDate(order.event_date);
         if (order.event_date !== originalEventDate) {
+          console.log(`🔍 [FINALIZE_ORDER] Event date normalized: "${originalEventDate}" → "${order.event_date}"`);
         }
       } catch (error) {
+        console.error(`❌ [FINALIZE_ORDER] Failed to normalize event_date "${order.event_date}":`, error.message);
         // Don't fail finalization, but log the error
       }
     }
@@ -876,12 +947,15 @@ async function finalizeOrder(orderId) {
         if (typeof originalDeliveryTime === 'string' && originalDeliveryTime.trim()) {
           order.delivery_time = normalizeDeliveryTime(originalDeliveryTime);
           if (order.delivery_time !== originalDeliveryTime) {
+            console.log(`🔍 [FINALIZE_ORDER] Delivery time normalized: "${originalDeliveryTime}" → "${order.delivery_time}"`);
           }
         } else {
           // Invalid or empty delivery_time, clear it
+          console.warn(`⚠️ [FINALIZE_ORDER] Invalid delivery_time format: "${originalDeliveryTime}", clearing it`);
           order.delivery_time = '';
         }
       } catch (error) {
+        console.error(`❌ [FINALIZE_ORDER] Failed to normalize delivery_time "${order.delivery_time}":`, error.message);
         // Clear invalid delivery_time to prevent issues in invoice formatting
         order.delivery_time = '';
       }
@@ -890,17 +964,22 @@ async function finalizeOrder(orderId) {
     // Update order status to "confirmed" in the appropriate sheet
     if (isWaitingListOrder) {
       await updateWaitingListOrderStatus(orderId, 'confirmed');
+      console.log(`✅ [FINALIZE_ORDER] Updated WaitingList order status to confirmed`);
     } else {
       await updateOrderStatus(orderId, 'confirmed');
+      console.log(`✅ [FINALIZE_ORDER] Updated Orders sheet order status to confirmed`);
     }
 
     // Ensure order exists in Orders sheet (UPSERT - update if exists, append if not)
     // saveOrder() now implements upsert internally, so we can call it safely
+    console.log(`📝 [FINALIZE_ORDER] Upserting order ${orderId} to Orders sheet...`);
     order.status = 'confirmed';
     await saveOrder(order, { skipDuplicateCheck: true }); // skipDuplicateCheck because we have lock + upsert handles it
+    console.log(`✅ [FINALIZE_ORDER] Order upserted to Orders sheet (update if exists, append if not)`);
 
     // Create reminders if Event Date is in the future
     if (order.event_date) {
+      console.log(`🔍 [FINALIZE_ORDER] Checking reminder creation - Order ID: ${orderId}, Event Date: ${order.event_date}`);
       
       // Normalize today for comparison
       const today = new Date();
@@ -925,30 +1004,42 @@ async function finalizeOrder(orderId) {
         // Normalize event date to start of day
         eventDateParsed.setHours(0, 0, 0, 0);
         
+        console.log(`🔍 [FINALIZE_ORDER] Event date parsed: ${eventDateParsed.toISOString().split('T')[0]}, Today: ${today.toISOString().split('T')[0]}`);
         
         // STRICT comparison: eventDate > today (not >=)
         if (eventDateParsed > today) {
+          console.log(`✅ [FINALIZE_ORDER] Event date is in the future, creating reminders...`);
           try {
             const reminders = await createOrderReminders(orderId, order.event_date, order);
             if (reminders.length > 0) {
+              console.log(`✅ [FINALIZE_ORDER] Successfully created ${reminders.length} reminder(s) for order ${orderId}`);
             } else {
+              console.log(`⚠️ [FINALIZE_ORDER] No reminders created for order ${orderId} (check logs above for reason)`);
             }
           } catch (error) {
+            console.error('❌ [FINALIZE_ORDER] Error creating reminders (non-critical):', error);
+            console.error('❌ [FINALIZE_ORDER] Stack:', error.stack);
             // Don't fail finalization if reminder creation fails
           }
         } else {
+          console.log(`⚠️ [FINALIZE_ORDER] Event date is not in the future (${eventDateParsed.toISOString().split('T')[0]} <= ${today.toISOString().split('T')[0]}), skipping reminder creation`);
         }
       } catch (error) {
+        console.error(`❌ [FINALIZE_ORDER] Failed to parse event date "${order.event_date}":`, error.message);
         // Don't fail finalization, but skip reminder creation
       }
     } else {
+      console.log(`⚠️ [FINALIZE_ORDER] No event date provided for order ${orderId}, skipping reminder creation`);
     }
 
     // Update order status in memory
     order.status = 'confirmed';
     
+    console.log(`✅ [FINALIZE_ORDER] Order ${orderId} finalized successfully`);
     return order;
   } catch (error) {
+    console.error(`❌ [FINALIZE_ORDER] Error finalizing order ${orderId}:`, error);
+    console.error(`❌ [FINALIZE_ORDER] Stack:`, error.stack);
     throw error;
   } finally {
     // Always release lock, even on error
@@ -962,10 +1053,12 @@ async function finalizeOrder(orderId) {
  * All order finalization goes through finalizeOrder() which has locking
  */
 async function handleOrderConfirmation(chatId, orderId, messageId) {
+  console.log(`🔘 [ORDER_CONFIRM] Starting confirmation - Order ID: ${orderId}, Chat ID: ${chatId}, Message ID: ${messageId}`);
   
   // Prevent duplicate processing (in-memory guard - additional safety)
   const confirmationKey = `${orderId}_${messageId}`;
   if (processedConfirmations.has(confirmationKey)) {
+    console.log(`⚠️ [ORDER_CONFIRM] Order confirmation already processed (in-memory), skipping: ${orderId}`);
     return;
   }
   processedConfirmations.add(confirmationKey);
@@ -996,11 +1089,13 @@ async function handleOrderConfirmation(chatId, orderId, messageId) {
 
     // Guard: Ensure invoice is valid before sending
     if (!invoice || typeof invoice !== 'string' || invoice.trim().length === 0) {
+      console.error('❌ [ORDER_CONFIRM] Invoice is invalid:', invoice);
       await sendTelegramMessage(chatId, '❌ Terjadi kesalahan saat membuat invoice. Silakan hubungi admin.');
       return;
     }
 
     // Send invoice (ONLY ONCE)
+    console.log('📄 [ORDER_CONFIRM] Sending invoice for order:', orderId);
     await sendTelegramMessage(chatId, invoice);
 
     // Send payment notification based on delivery date
@@ -1012,12 +1107,18 @@ async function handleOrderConfirmation(chatId, orderId, messageId) {
     
     // Guard: Only send if payment notification is valid
     if (paymentNotification && typeof paymentNotification === 'string' && paymentNotification.trim().length > 0) {
+      console.log('💰 [ORDER_CONFIRM] Sending payment notification for order:', orderId);
       await sendTelegramMessage(chatId, paymentNotification);
     } else {
+      console.warn('⚠️ [ORDER_CONFIRM] Payment notification returned invalid value, skipping:', paymentNotification);
     }
     
+    console.log(`✅ [ORDER_CONFIRM] Order ${orderId} confirmation completed successfully`);
+    console.log(`✅ [ORDER_CONFIRM] Returning early to prevent any other processing`);
     return; // CRITICAL: Return early to prevent any other processing
   } catch (error) {
+    console.error('❌ [ORDER_CONFIRM] Error confirming order:', error);
+    console.error('❌ [ORDER_CONFIRM] Stack:', error.stack);
     await sendTelegramMessage(chatId, '❌ Terjadi kesalahan saat mengkonfirmasi pesanan. Silakan coba lagi.');
     return; // CRITICAL: Return early even on error
   }
@@ -1028,6 +1129,7 @@ async function handleOrderConfirmation(chatId, orderId, messageId) {
  */
 async function handleOrderCancellation(chatId, orderId, messageId) {
   try {
+    console.log('❌ Order cancelled:', orderId);
 
     // Update order status to "cancelled"
     await updateOrderStatus(orderId, 'cancelled');
@@ -1039,6 +1141,7 @@ async function handleOrderCancellation(chatId, orderId, messageId) {
       '❌ **Pesanan Dibatalkan**\n\nSilakan kirim ulang pesanan Anda dengan format yang benar.\n\nKetik /help untuk melihat format pesanan.'
     );
   } catch (error) {
+    console.error('❌ Error cancelling order:', error);
   }
 }
 
@@ -1051,6 +1154,7 @@ async function editMessageText(chatId, messageId, text) {
 
   // Guard: Never send null or undefined text
   if (!text || typeof text !== 'string' || text.trim().length === 0) {
+    console.warn('⚠️ [EDIT_MESSAGE] Attempted to edit message with invalid text:', text);
     return;
   }
 
@@ -1078,6 +1182,7 @@ async function editMessageText(chatId, messageId, text) {
       
       // If markdown parsing error, retry without parse_mode
       if (error.error_code === 400 && error.description && error.description.includes("can't parse entities")) {
+        console.warn('⚠️ [EDIT_MESSAGE] Markdown parsing error, retrying as plain text:', error.description);
         
         payload = {
           chat_id: chatId,
@@ -1095,12 +1200,15 @@ async function editMessageText(chatId, messageId, text) {
         
         if (!retryResponse.ok) {
           const retryError = await retryResponse.json();
+          console.error('❌ Error editing message (plain text retry):', retryError);
         }
         return;
       }
       
+      console.error('❌ Error editing message:', error);
     }
   } catch (error) {
+    console.error('❌ Error editing message:', error);
   }
 }
 
@@ -1132,7 +1240,9 @@ async function editMessageReplyMarkup(chatId, messageId, replyMarkup = null) {
       },
       body: JSON.stringify(payload),
     });
+    console.log('✅ [EDIT_KEYBOARD] Removed inline keyboard from message:', messageId);
   } catch (error) {
+    console.error('❌ [EDIT_KEYBOARD] Error editing message reply markup:', error);
     // Non-critical, continue execution
   }
 }
@@ -1196,9 +1306,11 @@ function handleTelegramCommand(message) {
   const normalizedCommand = normalizeCommand(rawCommand);
   
   // Log command received
+  console.log(`🤖 [COMMAND] Received - command: "${rawCommand}", normalized: "${normalizedCommand}", args: [${args.join(', ')}], chatId: ${chatId}, userId: ${userId}`);
   
   // If no valid command, handle as unknown
   if (!normalizedCommand) {
+    console.log(`⚠️ [COMMAND] Invalid or empty command, treating as unknown`);
     sendTelegramMessage(chatId, '❌ Command tidak dikenali. Ketik /help untuk daftar perintah.');
     return;
   }
@@ -1284,18 +1396,27 @@ function handleTelegramCommand(message) {
       break;
     // Admin commands (PRD requirements)
     case '/new_order':
+      console.log(`🔍 [COMMAND] /new_order`);
       handleNewOrder(chatId, userId, sendTelegramMessage).catch(error => {
+        console.error('❌ [COMMAND] Error in /new_order handler:', error);
+        console.error('❌ [COMMAND] Stack:', error.stack);
         sendTelegramMessage(chatId, '❌ Maaf, ada error saat memproses perintah ini. Coba lagi ya.');
       });
       break;
     case '/parse_order':
+      console.log(`🔍 [COMMAND] /parse_order`);
       handleParseOrder(chatId, userId, messageText, sendTelegramMessage).catch(error => {
+        console.error('❌ [COMMAND] Error in /parse_order handler:', error);
+        console.error('❌ [COMMAND] Stack:', error.stack);
         sendTelegramMessage(chatId, '❌ Maaf, ada error saat memproses perintah ini. Coba lagi ya.');
       });
       break;
     case '/order_detail': {
       const orderId = args[0];
+      console.log(`🔍 [COMMAND] /order_detail - orderId: ${orderId || 'MISSING'}`);
       handleOrderDetail(chatId, userId, orderId, sendTelegramMessage).catch(error => {
+        console.error('❌ [COMMAND] Error in /order_detail handler:', error);
+        console.error('❌ [COMMAND] Stack:', error.stack);
         sendTelegramMessage(chatId, '❌ Maaf, ada error saat memproses perintah ini. Coba lagi ya.');
       });
       break;
@@ -1320,6 +1441,7 @@ function handleTelegramCommand(message) {
       break;
     }
     case '/today_reminder': {
+      console.log(`🔍 [COMMAND] /today_reminder`);
       isAdmin(userId).then(async (isUserAdmin) => {
         if (isUserAdmin) {
           await checkAndSendRemindersForToday(sendTelegramMessage);
@@ -1328,47 +1450,65 @@ function handleTelegramCommand(message) {
           await sendTelegramMessage(chatId, '❌ Anda tidak memiliki akses ke perintah ini.');
         }
       }).catch(error => {
+        console.error('❌ [COMMAND] Error in /today_reminder handler:', error);
+        console.error('❌ [COMMAND] Stack:', error.stack);
         sendTelegramMessage(chatId, '❌ Maaf, ada error saat memproses perintah ini. Coba lagi ya.');
       });
       break;
     }
     case '/admin_auth': {
+      console.log(`🔍 [COMMAND] /admin_auth`);
       handleAdminAuth(chatId, userId, messageText, sendTelegramMessage).catch(error => {
+        console.error('❌ [COMMAND] Error in /admin_auth handler:', error);
+        console.error('❌ [COMMAND] Stack:', error.stack);
         sendTelegramMessage(chatId, '❌ Maaf, ada error saat memproses perintah ini. Coba lagi ya.');
       });
       break;
     }
     case '/recap_h1': {
+      console.log(`🔍 [COMMAND] /recap_h1`);
       handleRecapH1(chatId, userId, sendTelegramMessage).catch(error => {
+        console.error('❌ [COMMAND] Error in /recap_h1 handler:', error);
+        console.error('❌ [COMMAND] Stack:', error.stack);
         sendTelegramMessage(chatId, '❌ Maaf, ada error saat memproses perintah ini. Coba lagi ya.');
       });
       break;
     }
     case '/orders_date': {
       const dateStr = args[0];
+      console.log(`🔍 [COMMAND] /orders_date - dateStr: "${dateStr}"`);
       if (!dateStr) {
         sendTelegramMessage(chatId, '❌ Format: /orders_date YYYY-MM-DD\n\nContoh: /orders_date 2026-01-18\nAtau gunakan: /orders_today, /orders_tomorrow');
         break;
       }
       handleOrdersDate(chatId, userId, dateStr, sendTelegramMessage).catch(error => {
+        console.error('❌ [COMMAND] Error in /orders_date handler:', error);
+        console.error('❌ [COMMAND] Stack:', error.stack);
         sendTelegramMessage(chatId, '❌ Maaf, ada error saat memproses perintah ini. Coba lagi ya.');
       });
       break;
     }
     case '/orders_today': {
+      console.log(`🔍 [COMMAND] /orders_today`);
       handleOrdersDate(chatId, userId, 'today', sendTelegramMessage).catch(error => {
+        console.error('❌ [COMMAND] Error in /orders_today handler:', error);
+        console.error('❌ [COMMAND] Stack:', error.stack);
         sendTelegramMessage(chatId, '❌ Maaf, ada error saat memproses perintah ini. Coba lagi ya.');
       });
       break;
     }
     case '/orders_tomorrow': {
+      console.log(`🔍 [COMMAND] /orders_tomorrow`);
       handleOrdersDate(chatId, userId, 'tomorrow', sendTelegramMessage).catch(error => {
+        console.error('❌ [COMMAND] Error in /orders_tomorrow handler:', error);
+        console.error('❌ [COMMAND] Stack:', error.stack);
         sendTelegramMessage(chatId, '❌ Maaf, ada error saat memproses perintah ini. Coba lagi ya.');
       });
       break;
     }
     default:
       // Unknown command - respond with friendly message
+      console.log(`⚠️ [COMMAND] Unknown command: "${normalizedCommand}"`);
       sendTelegramMessage(chatId, '❌ Command tidak dikenali. Ketik /help untuk daftar perintah.');
       break;
   }
@@ -1386,6 +1526,7 @@ app.post('/api/messages/send', async (req, res) => {
       return res.status(400).json({ error: 'Missing "chatId" or "text" field' });
     }
 
+    console.log('📤 Sending Telegram message:', { chatId, text });
 
     // Send message via Telegram Bot API
     const result = await sendTelegramMessage(chatId, text);
@@ -1409,6 +1550,7 @@ app.post('/api/messages/send', async (req, res) => {
     };
 
     await saveMessage(messageData);
+    console.log('💾 Sent message saved to database');
 
     res.json({
       success: true,
@@ -1417,6 +1559,7 @@ app.post('/api/messages/send', async (req, res) => {
       message: 'Message sent successfully via Telegram',
     });
   } catch (error) {
+    console.error('❌ Error sending Telegram message:', error);
     res.status(500).json({ error: 'Failed to send message', details: error.message });
   }
 });
@@ -1470,11 +1613,13 @@ function sanitizeMarkdown(text) {
   
   // Check if bold markers are balanced (even number of **)
   if (boldMatches && boldMatches.length % 2 !== 0) {
+    console.warn('⚠️ [SANITIZE_MARKDOWN] Unbalanced bold markers (**), escaping markdown');
     return escapeMarkdown(text);
   }
   
   // Check if code markers are balanced (even number of `)
   if (codeMatches && codeMatches.length % 2 !== 0) {
+    console.warn('⚠️ [SANITIZE_MARKDOWN] Unbalanced code markers (`), escaping markdown');
     return escapeMarkdown(text);
   }
   
@@ -1482,6 +1627,7 @@ function sanitizeMarkdown(text) {
   // This is more complex, so we'll be conservative
   const singleAsterisks = text.match(/(?<!\*)\*(?!\*)/g);
   if (singleAsterisks && singleAsterisks.length % 2 !== 0) {
+    console.warn('⚠️ [SANITIZE_MARKDOWN] Unbalanced italic markers (*), escaping markdown');
     return escapeMarkdown(text);
   }
   
@@ -1491,8 +1637,12 @@ function sanitizeMarkdown(text) {
 /**
  * Send message via Telegram Bot API
  * Handles markdown parsing errors gracefully by falling back to plain text
+ * @param {number|string} chatId - Chat ID to send message to
+ * @param {string} text - Message text
+ * @param {Object|null} replyMarkup - Inline keyboard markup (optional)
+ * @param {number|null} replyToMessageId - Message ID to reply to (for group chats, optional)
  */
-async function sendTelegramMessage(chatId, text, replyMarkup = null) {
+async function sendTelegramMessage(chatId, text, replyMarkup = null, replyToMessageId = null) {
   const botToken = process.env.TELEGRAM_BOT_TOKEN;
 
   if (!botToken) {
@@ -1501,6 +1651,7 @@ async function sendTelegramMessage(chatId, text, replyMarkup = null) {
 
   // Guard: Never send null or undefined text
   if (!text || typeof text !== 'string' || text.trim().length === 0) {
+    console.warn('⚠️ [SEND_MESSAGE] Attempted to send message with invalid text:', text);
     throw new Error('Cannot send message: text must be a non-empty string');
   }
 
@@ -1517,6 +1668,11 @@ async function sendTelegramMessage(chatId, text, replyMarkup = null) {
     payload.reply_markup = replyMarkup;
   }
 
+  // Add reply_to_message_id for group chats (makes it clear which message we're responding to)
+  if (replyToMessageId) {
+    payload.reply_to_message_id = replyToMessageId;
+  }
+
   try {
     const response = await fetch(url, {
       method: 'POST',
@@ -1531,6 +1687,8 @@ async function sendTelegramMessage(chatId, text, replyMarkup = null) {
       
       // If it's a markdown parsing error, retry without parse_mode
       if (error.error_code === 400 && error.description && error.description.includes("can't parse entities")) {
+        console.warn('⚠️ [SEND_MESSAGE] Markdown parsing error, retrying as plain text:', error.description);
+        console.warn('⚠️ [SEND_MESSAGE] Problematic text (first 200 chars):', text.substring(0, 200));
         
         // Retry without parse_mode (plain text)
         payload = {
@@ -1540,6 +1698,11 @@ async function sendTelegramMessage(chatId, text, replyMarkup = null) {
         
         if (replyMarkup) {
           payload.reply_markup = replyMarkup;
+        }
+        
+        // Include reply_to_message_id in retry
+        if (replyToMessageId) {
+          payload.reply_to_message_id = replyToMessageId;
         }
         
         const retryResponse = await fetch(url, {
@@ -1560,6 +1723,7 @@ async function sendTelegramMessage(chatId, text, replyMarkup = null) {
           throw new Error(`Telegram API error: ${retryData.description}`);
         }
         
+        console.log('✅ Telegram message sent successfully (as plain text after markdown error):', retryData.result);
         return retryData.result;
       }
       
@@ -1570,6 +1734,8 @@ async function sendTelegramMessage(chatId, text, replyMarkup = null) {
     if (!data.ok) {
       // If it's a markdown parsing error, retry without parse_mode
       if (data.error_code === 400 && data.description && data.description.includes("can't parse entities")) {
+        console.warn('⚠️ [SEND_MESSAGE] Markdown parsing error, retrying as plain text:', data.description);
+        console.warn('⚠️ [SEND_MESSAGE] Problematic text (first 200 chars):', text.substring(0, 200));
         
         // Retry without parse_mode (plain text)
         payload = {
@@ -1579,6 +1745,11 @@ async function sendTelegramMessage(chatId, text, replyMarkup = null) {
         
         if (replyMarkup) {
           payload.reply_markup = replyMarkup;
+        }
+        
+        // Include reply_to_message_id in retry
+        if (replyToMessageId) {
+          payload.reply_to_message_id = replyToMessageId;
         }
         
         const retryResponse = await fetch(url, {
@@ -1599,16 +1770,19 @@ async function sendTelegramMessage(chatId, text, replyMarkup = null) {
           throw new Error(`Telegram API error: ${retryData.description}`);
         }
         
+        console.log('✅ Telegram message sent successfully (as plain text after markdown error):', retryData.result);
         return retryData.result;
       }
       
       throw new Error(`Telegram API error: ${data.description}`);
     }
 
+    console.log('✅ Telegram message sent successfully:', data.result);
     return data.result;
   } catch (error) {
     // If it's a markdown parsing error, try one more time as plain text
     if (error.message && error.message.includes("can't parse entities")) {
+      console.warn('⚠️ [SEND_MESSAGE] Markdown parsing error in catch block, retrying as plain text');
       
       payload = {
         chat_id: chatId,
@@ -1617,6 +1791,11 @@ async function sendTelegramMessage(chatId, text, replyMarkup = null) {
       
       if (replyMarkup) {
         payload.reply_markup = replyMarkup;
+      }
+      
+      // Include reply_to_message_id in retry
+      if (replyToMessageId) {
+        payload.reply_to_message_id = replyToMessageId;
       }
       
       const retryResponse = await fetch(url, {
@@ -1637,6 +1816,7 @@ async function sendTelegramMessage(chatId, text, replyMarkup = null) {
         throw new Error(`Telegram API error: ${retryData.description}`);
       }
       
+      console.log('✅ Telegram message sent successfully (as plain text after markdown error):', retryData.result);
       return retryData.result;
     }
     
@@ -1653,6 +1833,7 @@ app.get('/api/messages', async (req, res) => {
     const messages = await getAllMessages(limit);
     res.json({ messages, count: messages.length });
   } catch (error) {
+    console.error('❌ Error getting messages:', error);
     res.status(500).json({ error: 'Failed to get messages', details: error.message });
   }
 });
@@ -1666,6 +1847,7 @@ app.get('/api/conversations', async (req, res) => {
     const conversations = await getAllConversations(limit);
     res.json({ conversations, count: conversations.length });
   } catch (error) {
+    console.error('❌ Error getting conversations:', error);
     res.status(500).json({ error: 'Failed to get conversations', details: error.message });
   }
 });
@@ -1715,6 +1897,7 @@ app.get('/api/orders', async (req, res) => {
     
     res.json({ orders, count: orders.length });
   } catch (error) {
+    console.error('❌ Error getting orders:', error);
     res.status(500).json({ error: 'Failed to get orders', details: error.message });
   }
 });
@@ -1727,6 +1910,7 @@ app.get('/api/waiting-list', async (req, res) => {
     const orders = await getWaitingListOrders();
     res.json({ orders, count: orders.length });
   } catch (error) {
+    console.error('❌ Error getting waiting list:', error);
     res.status(500).json({ error: 'Failed to get waiting list', details: error.message });
   }
 });
@@ -1739,6 +1923,7 @@ app.post('/api/waiting-list/check', async (req, res) => {
     await checkAndSendReminders();
     res.json({ message: 'Waiting list check completed', timestamp: new Date().toISOString() });
   } catch (error) {
+    console.error('❌ Error checking waiting list:', error);
     res.status(500).json({ error: 'Failed to check waiting list', details: error.message });
   }
 });
@@ -1754,6 +1939,7 @@ app.get('/api/orders/:id', async (req, res) => {
     // Normalize order_id for lookup
     const { normalizeOrderId } = await import('./google-sheets.js');
     const normalizedOrderId = normalizeOrderId(orderId);
+    console.log(`🔍 [API_ORDER_DETAIL] Looking up order_id: "${normalizedOrderId}" (original: "${orderId}")`);
     
     const orders = await getAllOrders(1000);
     const order = orders.find(o => {
@@ -1762,6 +1948,7 @@ app.get('/api/orders/:id', async (req, res) => {
     });
     
     if (!order) {
+      console.log(`⚠️ [API_ORDER_DETAIL] Order ${normalizedOrderId} not found`);
       return res.status(404).json({ error: 'Order not found' });
     }
     
@@ -1797,9 +1984,12 @@ app.get('/api/orders/:id', async (req, res) => {
       remaining_balance: remainingBalance,
     };
     
+    console.log(`✅ [API_ORDER_DETAIL] Order found with pricing: total_amount=${orderWithPricing.total_amount}, paid_amount=${orderWithPricing.paid_amount}, payment_status=${orderWithPricing.payment_status}`);
     
     res.json({ order: orderWithPricing });
   } catch (error) {
+    console.error('❌ Error getting order:', error);
+    console.error('❌ Stack:', error.stack);
     res.status(500).json({ error: 'Failed to get order', details: error.message });
   }
 });
@@ -1856,7 +2046,9 @@ app.patch('/api/orders/:id/status', async (req, res) => {
     try {
       await updateOrderStatus(orderId, status);
       orderUpdated = true;
+      console.log(`✅ Order ${orderId} status updated to ${status} in Orders sheet`);
     } catch (error) {
+      console.log(`⚠️  Order ${orderId} not found in Orders sheet, checking WaitingList...`);
     }
     
     // Also try to update in WaitingList (order might be in both)
@@ -1864,7 +2056,9 @@ app.patch('/api/orders/:id/status', async (req, res) => {
       await updateWaitingListOrderStatus(orderId, status);
       if (!orderUpdated) {
         orderUpdated = true;
+        console.log(`✅ Order ${orderId} status updated to ${status} in WaitingList sheet`);
       } else {
+        console.log(`✅ Order ${orderId} status also updated in WaitingList sheet`);
       }
     } catch (error) {
       // Order not in WaitingList, that's okay if it was in Orders
@@ -1896,9 +2090,12 @@ app.patch('/api/orders/:id/status', async (req, res) => {
         if (telegramChatId) {
           const notificationMessage = getStatusNotificationMessage(status, order);
           await sendTelegramMessage(telegramChatId, notificationMessage);
+          console.log(`📬 Status notification sent to customer for order ${orderId}`);
         } else {
+          console.log(`⚠️  Could not send notification for order ${orderId}: No Telegram chat ID found`);
         }
       } catch (error) {
+        console.error(`❌ Error sending status notification for order ${orderId}:`, error);
         // Don't fail the status update if notification fails
       }
     }
@@ -1910,6 +2107,7 @@ app.patch('/api/orders/:id/status', async (req, res) => {
       newStatus: status,
     });
   } catch (error) {
+    console.error('❌ Error updating order status:', error);
     res.status(500).json({ error: 'Failed to update order status', details: error.message });
   }
 });
@@ -1964,6 +2162,7 @@ async function findDeliveringOrdersForCustomer(conversationId) {
  */
 async function handleCustomerOrderCompletion(chatId, customerTelegramId, messageText) {
   try {
+    console.log('🔍 Customer completion request:', { chatId, customerTelegramId, messageText });
 
     // Get conversation to find customer's orders
     const conversation = await getOrCreateConversation(
@@ -1979,6 +2178,7 @@ async function handleCustomerOrderCompletion(chatId, customerTelegramId, message
 
     if (explicitOrderId) {
       // Case A: Explicit order ID provided
+      console.log(`📋 Explicit order ID found: ${explicitOrderId}`);
       
       // Get the specific order
       const allOrders = await getAllOrders(1000);
@@ -2013,6 +2213,11 @@ async function handleCustomerOrderCompletion(chatId, customerTelegramId, message
           chatId,
           '❌ Anda tidak memiliki izin untuk menyelesaikan pesanan ini.'
         );
+        console.log('⚠️  Customer identity mismatch:', {
+          orderId: explicitOrderId,
+          orderConversationId: order.conversation_id,
+          customerConversationId: conversation.id
+        });
         return;
       }
 
@@ -2033,6 +2238,7 @@ async function handleCustomerOrderCompletion(chatId, customerTelegramId, message
       if (deliveringOrders.length === 1) {
         // Exactly one delivering order - complete it
         orderToComplete = deliveringOrders[0];
+        console.log(`✅ Found single delivering order: ${orderToComplete.id}`);
       } else {
         // Multiple delivering orders - ask user to specify
         const orderList = deliveringOrders.map(order => 
@@ -2057,16 +2263,23 @@ async function handleCustomerOrderCompletion(chatId, customerTelegramId, message
         chatId,
         '❌ Anda tidak memiliki izin untuk menyelesaikan pesanan ini.'
       );
+      console.log('⚠️  Customer identity mismatch:', {
+        orderId: orderToComplete.id,
+        orderConversationId: orderToComplete.conversation_id,
+        customerConversationId: conversation.id
+      });
       return;
     }
 
     // Update order status to completed
     try {
       await updateOrderStatus(orderToComplete.id, 'completed');
+      console.log(`✅ Order ${orderToComplete.id} marked as completed by customer`);
     } catch (error) {
       // Try waiting list if not in orders
       try {
         await updateWaitingListOrderStatus(orderToComplete.id, 'completed');
+        console.log(`✅ Order ${orderToComplete.id} marked as completed in waiting list`);
       } catch (err) {
         throw error; // Throw original error
       }
@@ -2081,7 +2294,9 @@ async function handleCustomerOrderCompletion(chatId, customerTelegramId, message
       `Terima kasih atas kepercayaan Anda! 🙏`
     );
 
+    console.log(`✅ Customer ${chatId} completed order ${orderToComplete.id}`);
   } catch (error) {
+    console.error('❌ Error handling customer order completion:', error);
     await sendTelegramMessage(
       chatId,
       '❌ Terjadi kesalahan saat menandai pesanan sebagai selesai. Silakan coba lagi atau hubungi kami.'
@@ -2155,6 +2370,7 @@ app.post('/api/orders/:id/complete', async (req, res) => {
       message: 'Order marked as completed by customer' 
     });
   } catch (error) {
+    console.error('❌ Error completing order:', error);
     res.status(500).json({ error: 'Failed to complete order', details: error.message });
   }
 });
@@ -2169,6 +2385,7 @@ app.get('/api/conversations/:conversationId/messages', async (req, res) => {
     const messages = await getMessagesByConversation(conversationId, limit);
     res.json({ messages, count: messages.length });
   } catch (error) {
+    console.error('❌ Error getting conversation messages:', error);
     res.status(500).json({ error: 'Failed to get messages', details: error.message });
   }
 });
@@ -2216,19 +2433,34 @@ app.get('*', (req, res) => {
 
 // Start server
 app.listen(PORT, async () => {
+  console.log(`🚀 Server running on http://localhost:${PORT}`);
+  console.log(`📡 Telegram webhook: http://localhost:${PORT}/api/webhooks/telegram`);
+  console.log(`💬 Send Telegram: POST http://localhost:${PORT}/api/messages/send`);
+  console.log(`📝 Manual WhatsApp: POST http://localhost:${PORT}/api/messages/whatsapp-manual`);
+  console.log(`\n📋 Setup Instructions:`);
+  console.log(`   1. Set TELEGRAM_BOT_TOKEN in .env file`);
+  console.log(`   2. Set DATABASE_URL in .env file (PostgreSQL)`);
+  console.log(`   3. For LOCAL development: Polling will start automatically`);
+  console.log(`\n🔄 Initializing Google Sheets storage...`);
   
   try {
     // Initialize Google Sheets
     await initializeStorage();
+    console.log(`✅ Google Sheets ready`);
   } catch (error) {
+    console.error(`⚠️  Google Sheets initialization failed:`, error.message);
+    console.log(`   Make sure GOOGLE_SERVICE_ACCOUNT_KEY_FILE and GOOGLE_SPREADSHEET_ID are set in .env`);
+    console.log(`   Continuing without storage (messages stored in memory only)`);
   }
   
   // Start polling only in development mode
   // In production, use webhook instead
   if (process.env.NODE_ENV === 'production') {
-    // Set webhook for production
-    await setWebhook();
+    console.log(`\n🌐 Production mode: Using webhook (polling disabled)`);
+    console.log(`   Make sure webhook is set: https://api.telegram.org/bot<TOKEN>/setWebhook?url=<YOUR_URL>/api/webhooks/telegram`);
   } else {
+    console.log(`\n🔄 Development mode: Starting polling...`);
+    console.log(`   (This will automatically remove any existing webhook)`);
     startPolling();
   }
   
@@ -2238,13 +2470,17 @@ app.listen(PORT, async () => {
   // Initialize Reminders sheet
   try {
     await ensureRemindersSheet();
+    console.log('✅ Reminders sheet ready');
   } catch (error) {
+    console.error('⚠️ Reminders sheet initialization failed:', error.message);
   }
   
   // Ensure Orders sheet has payment headers
   try {
     await ensureOrdersPaymentHeaders();
+    console.log('✅ Orders payment headers ready');
   } catch (error) {
+    console.error('⚠️ Orders payment headers initialization failed:', error.message);
   }
   
   // Start reminder scheduler (check every 6 hours)
@@ -2263,6 +2499,7 @@ function startReminderScheduler() {
     checkAndSendRemindersForToday(sendTelegramMessage);
   }, 6 * 60 * 60 * 1000); // 6 hours
   
+  console.log('✅ Reminder scheduler started (checks every 6 hours)');
 }
 
 /**
@@ -2270,12 +2507,15 @@ function startReminderScheduler() {
  */
 async function checkAndSendReminders() {
   try {
+    console.log('🔄 Checking waiting list for due orders...');
     const dueOrders = await checkWaitingList();
     
     if (dueOrders.length === 0) {
+      console.log('✅ No orders due today');
       return;
     }
     
+    console.log(`📬 Found ${dueOrders.length} order(s) due today`);
     
     for (const order of dueOrders) {
       // Send reminder message
@@ -2297,6 +2537,8 @@ async function checkAndSendReminders() {
       
       // TODO: Send to admin/owner (for now, just log)
       // In future, can send to admin Telegram chat or email
+      console.log(`📬 Reminder for order ${order.id}:`);
+      console.log(reminderMessage);
       
       // Mark reminder as sent
       await markReminderSent(order.id);
@@ -2305,7 +2547,9 @@ async function checkAndSendReminders() {
       // You can implement this if needed
     }
     
+    console.log(`✅ Sent ${dueOrders.length} reminder(s)`);
   } catch (error) {
+    console.error('❌ Error checking waiting list:', error);
   }
 }
 
@@ -2321,10 +2565,12 @@ function startWaitingListChecker() {
     checkAndSendReminders();
   }, 60 * 60 * 1000); // 1 hour
   
+  console.log('✅ Waiting list checker started (checks every hour)');
 }
 
 // Cleanup on exit
 process.on('SIGINT', () => {
+  console.log('\n👋 Shutting down...');
   stopPolling();
   process.exit(0);
 });
