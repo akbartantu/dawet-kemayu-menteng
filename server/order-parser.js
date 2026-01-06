@@ -658,6 +658,7 @@ export function parseOrderMessageV2(messageText) {
     delivery_time: null,
     items: [],
     notes: [],
+    delivery_fee: null, // Biaya Pengiriman (Ongkir)
   };
 
   if (!normalizedText || normalizedText.length === 0) {
@@ -883,14 +884,18 @@ export function parseOrderMessageV2(messageText) {
       continue;
     }
 
-    // Parse Biaya Pengiriman (Rp)
+    // Parse Biaya Pengiriman (Rp) - store as delivery_fee
     if (line.match(/^Biaya\s+Pengiriman\s*\(Rp\)\s*:?\s*(.+)$/i)) {
       const cost = line.replace(/^Biaya\s+Pengiriman\s*\(Rp\)\s*:?\s*/i, '').trim();
       if (cost && cost !== '-') {
         // Extract numeric value
         const costNum = cost.replace(/[^\d]/g, '');
         if (costNum) {
-          order.notes.push(`Biaya Pengiriman: Rp ${costNum}`);
+          const deliveryFee = parseInt(costNum, 10);
+          if (!isNaN(deliveryFee) && deliveryFee >= 0) {
+            order.delivery_fee = deliveryFee;
+            console.log(`✅ [PARSE_V2] Extracted delivery_fee: Rp ${deliveryFee}`);
+          }
         }
       }
       continue;
@@ -940,6 +945,7 @@ export function parseOrderMessageV2(messageText) {
     items_sample: order.items.length > 0 ? `${order.items[0].quantity}x ${order.items[0].name}` : 'none',
     event_date: order.event_date ? '✓' : '✗',
     delivery_time: order.delivery_time ? '✓' : '✗',
+    delivery_fee: order.delivery_fee !== null ? `Rp ${order.delivery_fee}` : '✗',
   });
 
   // Fallback: If delivery_time is still empty, try extracting from natural language

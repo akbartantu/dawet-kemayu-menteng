@@ -507,6 +507,7 @@ async function handleTelegramMessage(message) {
           delivery_time: parsedOrder.delivery_time,
           items: parsedOrder.items,
           notes: parsedOrder.notes,
+          delivery_fee: parsedOrder.delivery_fee || null, // Biaya Pengiriman (Ongkir)
           status: 'pending',
           created_at: new Date().toISOString(),
         };
