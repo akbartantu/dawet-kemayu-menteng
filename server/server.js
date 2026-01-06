@@ -459,8 +459,8 @@ async function handleTelegramMessage(message) {
         try {
           parsedOrder = parseOrderFromMessageAuto(message.text);
         } catch (parseError) {
-          // Handle parsing errors (e.g., invalid shipping_fee)
-          if (parseError.field === 'shipping_fee') {
+          // Handle parsing errors (e.g., invalid delivery_fee)
+          if (parseError.field === 'delivery_fee') {
             const errorMessage = `❌ ${parseError.message}`;
             await sendTelegramMessage(message.chat.id, errorMessage);
             orderProcessed = true;
@@ -519,7 +519,7 @@ async function handleTelegramMessage(message) {
           delivery_time: parsedOrder.delivery_time,
           items: parsedOrder.items,
           notes: parsedOrder.notes,
-          delivery_fee: parsedOrder.delivery_fee || null, // Biaya Pengiriman (Ongkir)
+          delivery_fee: parsedOrder.delivery_fee !== null && parsedOrder.delivery_fee !== undefined ? parsedOrder.delivery_fee : null, // Biaya Pengiriman (Ongkir)
           status: 'pending',
           created_at: new Date().toISOString(),
         };
@@ -1507,8 +1507,7 @@ async function handleTelegramCommand(message) {
             delivery_time: parsedOrder.delivery_time,
             items: parsedOrder.items,
             notes: parsedOrder.notes,
-            delivery_fee: parsedOrder.shipping_fee !== null ? parsedOrder.shipping_fee : null, // Map shipping_fee to delivery_fee for Google Sheets
-            shipping_fee_source: parsedOrder.shipping_fee_source || null, // Store source for display logic
+            delivery_fee: parsedOrder.delivery_fee !== null && parsedOrder.delivery_fee !== undefined ? parsedOrder.delivery_fee : null, // Biaya Pengiriman (Ongkir)
             status: 'pending',
             created_at: new Date().toISOString(),
           };

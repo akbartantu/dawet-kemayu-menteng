@@ -443,10 +443,10 @@ export function parseOrderFromMessage(messageText) {
     order.address = addressLines.join(', ').trim();
   }
 
-  // Set shipping_fee_source if not provided (V1 format doesn't have Biaya Pengiriman field)
-  if (order.shipping_fee_source === null) {
-    order.shipping_fee = 0;
-    order.shipping_fee_source = 'NOT_PROVIDED';
+  // Set delivery_fee_source if not provided (V1 format doesn't have Biaya Pengiriman field)
+  if (order.delivery_fee_source === null) {
+    order.delivery_fee = 0;
+    order.delivery_fee_source = 'NOT_PROVIDED';
   }
 
   // Log parsing results
@@ -458,8 +458,8 @@ export function parseOrderFromMessage(messageText) {
     items_sample: order.items.length > 0 ? `${order.items[0].quantity}x ${order.items[0].name}` : 'none',
     event_date: order.event_date ? '✓' : '✗',
     delivery_time: order.delivery_time ? '✓' : '✗',
-    shipping_fee: order.shipping_fee !== null ? `Rp ${order.shipping_fee}` : '✗',
-    shipping_fee_source: order.shipping_fee_source || '✗',
+    delivery_fee: order.delivery_fee !== null ? `Rp ${order.delivery_fee}` : '✗',
+    delivery_fee_source: order.delivery_fee_source || '✗',
   });
 
   // Fallback: If delivery_time is still empty, try extracting from natural language
@@ -668,8 +668,8 @@ export function parseOrderMessageV2(messageText) {
     delivery_time: null,
     items: [],
     notes: [],
-    shipping_fee: null, // Biaya Pengiriman (Ongkir) - canonical field
-    shipping_fee_source: null, // 'USER_INPUT', 'USER_EMPTY', 'NOT_PROVIDED'
+    delivery_fee: null, // Biaya Pengiriman (Ongkir) - canonical field for Google Sheets
+    delivery_fee_source: null, // 'USER_INPUT', 'USER_EMPTY', 'NOT_PROVIDED'
   };
 
   if (!normalizedText || normalizedText.length === 0) {
@@ -947,10 +947,10 @@ export function parseOrderMessageV2(messageText) {
     order.address = addressLines.join(', ').trim();
   }
 
-  // Set shipping_fee_source if not provided
-  if (order.shipping_fee_source === null) {
-    order.shipping_fee = 0;
-    order.shipping_fee_source = 'NOT_PROVIDED';
+  // Set delivery_fee_source if not provided
+  if (order.delivery_fee_source === null) {
+    order.delivery_fee = 0;
+    order.delivery_fee_source = 'NOT_PROVIDED';
   }
 
   // Log parsing results
@@ -962,8 +962,8 @@ export function parseOrderMessageV2(messageText) {
     items_sample: order.items.length > 0 ? `${order.items[0].quantity}x ${order.items[0].name}` : 'none',
     event_date: order.event_date ? '✓' : '✗',
     delivery_time: order.delivery_time ? '✓' : '✗',
-    shipping_fee: order.shipping_fee !== null ? `Rp ${order.shipping_fee}` : '✗',
-    shipping_fee_source: order.shipping_fee_source || '✗',
+    delivery_fee: order.delivery_fee !== null ? `Rp ${order.delivery_fee}` : '✗',
+    delivery_fee_source: order.delivery_fee_source || '✗',
   });
 
   // Fallback: If delivery_time is still empty, try extracting from natural language
