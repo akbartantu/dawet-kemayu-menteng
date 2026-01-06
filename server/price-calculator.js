@@ -457,14 +457,23 @@ export function formatInvoice(order, priceList) {
     }
   }
   
-  // Parse delivery_fee (may be stored as string in Google Sheets)
+  // Parse shipping_fee (canonical field) with fallback to delivery_fee (Google Sheets compatibility)
+  // Also check shipping_fee_source for display logic
   let shippingPrice = 0;
-  if (order.delivery_fee !== undefined && order.delivery_fee !== null && order.delivery_fee !== '') {
-    const parsedFee = parseFloat(order.delivery_fee);
+  const shippingFeeSource = order.shipping_fee_source || 'NOT_PROVIDED';
+  
+  // Prefer shipping_fee, fallback to delivery_fee for backward compatibility
+  const rawShippingFee = order.shipping_fee !== undefined ? order.shipping_fee : order.delivery_fee;
+  
+  if (rawShippingFee !== undefined && rawShippingFee !== null && rawShippingFee !== '') {
+    const parsedFee = parseFloat(rawShippingFee);
     if (!isNaN(parsedFee) && parsedFee >= 0) {
       shippingPrice = parsedFee;
     }
   }
+  
+  // Store source for display logic
+  order._shipping_fee_source = shippingFeeSource;
   // Use total_amount (canonical) with fallback to final_total (legacy) or calculated
   const totalAmount = order.total_amount || order.final_total || subtotal + packagingPrice + shippingPrice;
   const dpMinimum = calculateMinDP(totalAmount);
@@ -519,7 +528,17 @@ export function formatInvoice(order, priceList) {
   }
   
   invoice += `Pengiriman: ${metodePengiriman}\n`;
-  invoice += `Ongkir: Rp${formatPrice(shippingPrice)}\n\n`;
+  
+  // Display Ongkir based on source
+  const shippingFeeSource = order._shipping_fee_source || 'NOT_PROVIDED';
+  if (shippingPrice > 0) {
+    invoice += `Ongkir: Rp${formatPrice(shippingPrice)}\n\n`;
+  } else if (shippingFeeSource === 'NOT_PROVIDED') {
+    invoice += `Ongkir: -\n\n`;
+  } else {
+    // USER_EMPTY or other case where user provided but value is 0
+    invoice += `Ongkir: Rp0\n\n`;
+  }
   invoice += `--------------------------------\n`;
   invoice += `TOTAL PEMBAYARAN:\n`;
   invoice += `Rp${formatPrice(totalAmount)}\n\n`;

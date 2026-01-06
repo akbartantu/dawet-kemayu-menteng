@@ -455,7 +455,19 @@ async function handleTelegramMessage(message) {
         const detectedFormat = detectOrderFormat(message.text);
         console.log(`🔍 [ORDER_PARSE] Private chat auto-parse - format: ${detectedFormat || 'none'}`);
         
-        const parsedOrder = parseOrderFromMessageAuto(message.text);
+        let parsedOrder;
+        try {
+          parsedOrder = parseOrderFromMessageAuto(message.text);
+        } catch (parseError) {
+          // Handle parsing errors (e.g., invalid shipping_fee)
+          if (parseError.field === 'shipping_fee') {
+            const errorMessage = `❌ ${parseError.message}`;
+            await sendTelegramMessage(message.chat.id, errorMessage);
+            orderProcessed = true;
+            return;
+          }
+          throw parseError; // Re-throw other errors
+        }
       
       console.log(`🔍 [ORDER_PARSE] Parsed fields:`, {
         customer_name: parsedOrder.customer_name ? '✓' : '✗',
@@ -1447,7 +1459,19 @@ async function handleTelegramCommand(message) {
         const detectedFormat = detectOrderFormat(payload);
         console.log(`🔍 [PESAN] Detected format: ${detectedFormat || 'none'}`);
         
-        const parsedOrder = parseOrderFromMessageAuto(payload);
+        let parsedOrder;
+        try {
+          parsedOrder = parseOrderFromMessageAuto(payload);
+        } catch (parseError) {
+          // Handle parsing errors (e.g., invalid shipping_fee)
+          if (parseError.field === 'shipping_fee') {
+            const errorMessage = `❌ ${parseError.message}`;
+            const replyToId = chatType !== 'private' ? message.message_id : null;
+            await sendTelegramMessage(chatId, errorMessage, null, replyToId);
+            return;
+          }
+          throw parseError; // Re-throw other errors
+        }
         
         // Get price list to check if notes are actually items
         const priceList = await getPriceList();
@@ -1483,6 +1507,8 @@ async function handleTelegramCommand(message) {
             delivery_time: parsedOrder.delivery_time,
             items: parsedOrder.items,
             notes: parsedOrder.notes,
+            delivery_fee: parsedOrder.shipping_fee !== null ? parsedOrder.shipping_fee : null, // Map shipping_fee to delivery_fee for Google Sheets
+            shipping_fee_source: parsedOrder.shipping_fee_source || null, // Store source for display logic
             status: 'pending',
             created_at: new Date().toISOString(),
           };
