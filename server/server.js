@@ -237,7 +237,6 @@ function setOrderState(chatId, userId, chatType, mode) {
     userId,
     chatType,
   });
-  console.log(`[STATE] chat_id=${chatId} from=${userId} is_group=${chatType === 'group' || chatType === 'supergroup'} mode_after=${mode}`);
 }
 
 /**
@@ -248,7 +247,6 @@ function clearOrderState(chatId, userId, chatType) {
   const state = orderStateByChat.get(key);
   if (state) {
     orderStateByChat.delete(key);
-    console.log(`[STATE] chat_id=${chatId} from=${userId} mode_before=${state.mode} mode_after=cleared`);
   }
 }
 
@@ -263,7 +261,6 @@ setInterval(() => {
     }
   }
   if (cleaned > 0) {
-    console.log(`🧹 [STATE] Cleaned up ${cleaned} expired order states`);
   }
 }, 5 * 60 * 1000); // Every 5 minutes
 
@@ -276,7 +273,6 @@ app.post('/api/webhooks/telegram', async (req, res) => {
   const update = req.body;
   const chatId = update.message?.chat?.id || update.callback_query?.message?.chat?.id || 'unknown';
   const textPreview = update.message?.text?.substring(0, 50) || update.callback_query?.data?.substring(0, 50) || 'no text';
-  console.log(`[RX] chat_id=${chatId} text_preview="${textPreview}"`);
   
   console.log('📨 Received Telegram webhook:', JSON.stringify(req.body, null, 2));
 
@@ -604,7 +600,6 @@ async function handleTelegramMessage(message) {
           let parsedOrder;
           try {
             parsedOrder = parseOrderFromMessageAuto(message.text);
-            console.log(`[PARSE] chat_id=${chatId} delivery_method="${parsedOrder.delivery_method || 'null'}"`);
             
             // Clear state if order was successfully parsed
             if (parsedOrder.customer_name || parsedOrder.items.length > 0) {
@@ -1548,7 +1543,6 @@ async function handleTelegramCommand(message) {
     case '/pesan':
       // Set state to AWAITING_FORM for this chat (if no payload)
       const currentState = getOrderState(chatId, userId, chatType);
-      console.log(`[STATE] chat_id=${chatId} from=${userId} is_group=${chatType === 'group' || chatType === 'supergroup'} mode_before=${currentState?.mode || 'none'}`);
       
       // Check if payload exists (order form in same message)
       if (payload && payload.trim().length > 0) {
@@ -2770,10 +2764,8 @@ app.get('*', (req, res) => {
 
 // Start server
 app.listen(PORT, async () => {
-  console.log(`[BOOT] started`);
   const renderUrl = process.env.RENDER_EXTERNAL_URL || process.env.WEBHOOK_URL || 'missing';
   const mode = process.env.NODE_ENV === 'production' ? 'webhook' : 'polling';
-  console.log(`[BOOT] mode=${mode}`);
   console.log(`[BOOT] render_url=${renderUrl}`);
   
   console.log(`🚀 Server running on http://localhost:${PORT}`);
