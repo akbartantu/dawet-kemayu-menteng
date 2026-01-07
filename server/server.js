@@ -1808,8 +1808,7 @@ async function handleTelegramCommand(message) {
     case '/orders_today': {
       logger.debug(`[COMMAND] /orders_today`);
       handleOrdersDate(chatId, userId, 'today', sendTelegramMessage).catch(error => {
-        console.error('❌ [COMMAND] Error in /orders_today handler:', error);
-        console.error('❌ [COMMAND] Stack:', error.stack);
+        logger.error('[COMMAND] Error in /orders_today handler:', error);
         sendTelegramMessage(chatId, '❌ Maaf, ada error saat memproses perintah ini. Coba lagi ya.');
       });
       break;
@@ -1825,7 +1824,7 @@ async function handleTelegramCommand(message) {
     }
     default:
       // Unknown command - respond with friendly message
-      console.log(`⚠️ [COMMAND] Unknown command: "${normalizedCommand}"`);
+      logger.debug(`[COMMAND] Unknown command: "${normalizedCommand}"`);
       sendTelegramMessage(chatId, '❌ Command tidak dikenali. Ketik /help untuk daftar perintah.');
       break;
   }
