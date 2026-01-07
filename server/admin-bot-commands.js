@@ -963,6 +963,13 @@ function formatOrderListMessage(orders, date) {
     const address = order.address || '-';
     const paymentStatus = order.payment_status || 'UNPAID';
     const remainingBalance = order.remaining_balance || 0;
+    const deliveryMethod = order.delivery_method || order.shipping_method || '-';
+    
+    // Get invoice totals
+    const productTotal = parseFloat(order.product_total || 0);
+    const packagingFee = parseFloat(order.packaging_fee || 0);
+    const deliveryFee = parseFloat(order.delivery_fee || 0);
+    const finalTotal = parseFloat(order.total_amount || order.final_total || 0);
     
     // Get items: prefer parsed items array, fallback to items_json string
     const itemsData = order.items || order.items_json || '[]';
