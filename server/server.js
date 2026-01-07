@@ -2800,18 +2800,90 @@ app.listen(PORT, async () => {
 });
 
 /**
+ * Get next 7 AM Jakarta time
+ * @returns {Date} Next 7 AM in Jakarta timezone (as UTC Date object)
+ */
+function getNext7AMJakarta() {
+  const now = new Date();
+  
+  // Get current time components in Jakarta timezone
+  const jakartaFormatter = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Asia/Jakarta',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+  });
+  
+  const parts = jakartaFormatter.formatToParts(now);
+  const jakartaHour = parseInt(parts.find(p => p.type === 'hour').value);
+  const jakartaMinute = parseInt(parts.find(p => p.type === 'minute').value);
+  const jakartaYear = parseInt(parts.find(p => p.type === 'year').value);
+  const jakartaMonth = parseInt(parts.find(p => p.type === 'month').value) - 1; // 0-indexed
+  const jakartaDay = parseInt(parts.find(p => p.type === 'day').value);
+  
+  // Determine target date: today or tomorrow
+  let targetYear = jakartaYear;
+  let targetMonth = jakartaMonth;
+  let targetDay = jakartaDay;
+  
+  // If it's already past 7 AM today, schedule for tomorrow
+  if (jakartaHour >= 7) {
+    const nextDay = new Date(jakartaYear, jakartaMonth, jakartaDay);
+    nextDay.setDate(nextDay.getDate() + 1);
+    targetYear = nextDay.getFullYear();
+    targetMonth = nextDay.getMonth();
+    targetDay = nextDay.getDate();
+  }
+  
+  // Jakarta is UTC+7, so 7 AM Jakarta = 00:00 UTC on the same date
+  // Create UTC date for midnight (00:00) on target day
+  const targetUTC = new Date(Date.UTC(targetYear, targetMonth, targetDay, 0, 0, 0, 0));
+  
+  return targetUTC;
+}
+
+/**
  * Start reminder scheduler (checks for H-4/H-3/H-1 reminders)
+ * Schedules reminders to run at 7 AM Jakarta time every day
  */
 function startReminderScheduler() {
-  // Run daily job immediately on startup
-  runDailyRemindersJob(sendTelegramMessage);
+  logger.debug('[REMINDER_SCHEDULER] Initializing reminder scheduler...');
   
-  // Then run once per day (every 24 hours)
-  setInterval(() => {
-    runDailyRemindersJob(sendTelegramMessage);
-  }, 24 * 60 * 60 * 1000); // 24 hours in milliseconds
+  // Function to schedule next run
+  const scheduleNextRun = () => {
+    // Calculate time until next 7 AM Jakarta
+    const next7AM = getNext7AMJakarta();
+    const now = new Date();
+    const msUntil7AM = next7AM.getTime() - now.getTime();
+    
+    // Format next run time for logging
+    const nextRunStr = next7AM.toLocaleString('en-US', { 
+      timeZone: 'Asia/Jakarta',
+      dateStyle: 'full',
+      timeStyle: 'long'
+    });
+    
+    logger.info(`[REMINDER_SCHEDULER] Next reminder run scheduled for: ${nextRunStr} (Jakarta time)`);
+    logger.debug(`[REMINDER_SCHEDULER] Time until next run: ${Math.floor(msUntil7AM / 1000 / 60)} minutes`);
+    
+    // Schedule run at 7 AM
+    setTimeout(() => {
+      logger.info('[REMINDER_SCHEDULER] Running scheduled reminder job at 7 AM Jakarta time');
+      runDailyRemindersJob(sendTelegramMessage);
+      
+      // Schedule next run (recursive)
+      scheduleNextRun();
+    }, msUntil7AM);
+  };
   
-  console.log('✅ Reminder scheduler started (runs daily job every 24 hours)');
+  // Start scheduling
+  scheduleNextRun();
+  
+  logger.info('[REMINDER_SCHEDULER] Reminder scheduler started (runs daily at 7 AM Jakarta time)');
 }
 
 /**
