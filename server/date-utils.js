@@ -3,6 +3,8 @@
  * Helper functions for date parsing and comparison
  */
 
+import logger from './logger.js';
+
 /**
  * Indonesian month names mapping
  */
@@ -130,7 +132,7 @@ export function normalizeEventDate(input) {
   // Format as YYYY-MM-DD
   const formatted = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
   
-  console.log(`✅ [NORMALIZE_EVENT_DATE] "${trimmed}" → "${formatted}"`);
+  logger.debug(`[NORMALIZE_EVENT_DATE] "${trimmed}" → "${formatted}"`);
   return formatted;
 }
 

@@ -4,6 +4,7 @@
  * Implements PRD Admin Assistant requirements
  */
 
+import logger from './logger.js';
 import { 
   getAllOrders, 
   getOrderById, 
@@ -100,7 +101,7 @@ export async function handleAdminAuth(chatId, userId, messageText, sendMessage) 
  */
 export async function isAdmin(telegramUserId) {
   if (!telegramUserId) {
-    console.log('⚠️ [ADMIN_CHECK] No userId provided');
+    logger.warn('[ADMIN_CHECK] No userId provided');
     return false;
   }
   
@@ -108,7 +109,7 @@ export async function isAdmin(telegramUserId) {
   const userIdString = String(telegramUserId);
   const userIdNumber = typeof telegramUserId === 'number' ? telegramUserId : parseInt(userIdString);
   
-  console.log(`🔍 [ADMIN_CHECK] Checking admin status - userId: ${telegramUserId} (string: "${userIdString}", number: ${userIdNumber})`);
+  logger.debug(`[ADMIN_CHECK] Checking admin status - userId: ${telegramUserId}`);
   
   try {
     // First check Users sheet - try both string and number formats
@@ -119,10 +120,10 @@ export async function isAdmin(telegramUserId) {
       role = await getUserRole('telegram', String(userIdNumber));
     }
     
-    console.log(`🔍 [ADMIN_CHECK] Users sheet lookup - role: ${role || 'not found'}`);
+    logger.debug(`[ADMIN_CHECK] Users sheet lookup - role: ${role || 'not found'}`);
     
     if (role === 'admin') {
-      console.log(`✅ [ADMIN_CHECK] User ${telegramUserId} is admin (from Users sheet)`);
+      logger.debug(`[ADMIN_CHECK] User ${telegramUserId} is admin (from Users sheet)`);
       return true;
     }
     
@@ -133,15 +134,14 @@ export async function isAdmin(telegramUserId) {
     
     const isEnvAdmin = adminIds.includes(userIdNumber);
     if (isEnvAdmin) {
-      console.log(`✅ [ADMIN_CHECK] User ${telegramUserId} is admin (from env var)`);
+      logger.debug(`[ADMIN_CHECK] User ${telegramUserId} is admin (from env var)`);
       return true;
     }
     
-    console.log(`❌ [ADMIN_CHECK] User ${telegramUserId} is NOT admin (role: ${role || 'customer'})`);
+    logger.debug(`[ADMIN_CHECK] User ${telegramUserId} is NOT admin (role: ${role || 'customer'})`);
     return false;
   } catch (error) {
-    console.error('❌ [ADMIN_CHECK] Error checking admin status:', error);
-    console.error('❌ [ADMIN_CHECK] Stack:', error.stack);
+    logger.error('[ADMIN_CHECK] Error checking admin status:', error);
     
     // Fallback to env var on error
     const adminIds = process.env.ADMIN_TELEGRAM_USER_IDS 
@@ -150,7 +150,7 @@ export async function isAdmin(telegramUserId) {
     
     const isEnvAdmin = adminIds.includes(userIdNumber);
     if (isEnvAdmin) {
-      console.log(`✅ [ADMIN_CHECK] User ${telegramUserId} is admin (from env var fallback)`);
+      logger.debug(`[ADMIN_CHECK] User ${telegramUserId} is admin (from env var fallback)`);
       return true;
     }
     
@@ -571,7 +571,7 @@ export async function handlePaymentStatus(chatId, userId, orderId, sendMessage) 
  */
 async function getOrdersByISODate(targetISO, paymentStatusFilter = null) {
   try {
-    console.log(`[ORDERS_FILTER] targetISO="${targetISO}"`);
+    logger.debug(`[ORDERS_FILTER] targetISO="${targetISO}"`);
     
     // Get all orders (we'll filter by date)
     const allOrders = await getAllOrders(10000); // Get large limit to ensure we get all orders
@@ -587,21 +587,16 @@ async function getOrdersByISODate(targetISO, paymentStatusFilter = null) {
       const normalizedOrderDate = toISODateJakarta(orderDate);
       
       if (!normalizedOrderDate) {
-        // Log for debugging but don't fail the filter
-        console.log(`[ORDERS_FILTER] raw="${orderDate}" normalized=null (skipping)`);
+        // Skip invalid dates silently in production
+        logger.debug(`[ORDERS_FILTER] raw="${orderDate}" normalized=null (skipping)`);
         return false;
       }
       
       // Compare normalized ISO dates
-      const matches = normalizedOrderDate === targetISO;
-      if (matches) {
-        console.log(`[ORDERS_FILTER] raw="${orderDate}" normalized="${normalizedOrderDate}" matched targetISO="${targetISO}"`);
-      }
-      
-      return matches;
+      return normalizedOrderDate === targetISO;
     });
     
-    console.log(`[ORDERS_FILTER] targetISO="${targetISO}" matched=${filteredOrders.length} total=${allOrders.length}`);
+    logger.debug(`[ORDERS_FILTER] targetISO="${targetISO}" matched=${filteredOrders.length} total=${allOrders.length}`);
     
     // Remove duplicates by order_id (defensive - should not happen, but handle it)
     const uniqueOrders = [];
@@ -616,7 +611,7 @@ async function getOrdersByISODate(targetISO, paymentStatusFilter = null) {
         uniqueOrders.push(order);
       } else {
         // Duplicate found - log warning
-        console.warn(`⚠️ [GET_ORDERS_BY_ISO_DATE] Duplicate order_id found: ${orderId} (skipping duplicate)`);
+        logger.warn(`[GET_ORDERS_BY_ISO_DATE] Duplicate order_id found: ${orderId} (skipping duplicate)`);
       }
     }
     
@@ -632,7 +627,7 @@ async function getOrdersByISODate(targetISO, paymentStatusFilter = null) {
         }
         return orderPaymentStatus === filterUpper;
       });
-      console.log(`🔍 [GET_ORDERS_BY_ISO_DATE] Filtered by payment_status="${paymentStatusFilter}": ${uniqueOrders.length} -> ${finalOrders.length} orders`);
+      logger.debug(`[GET_ORDERS_BY_ISO_DATE] Filtered by payment_status="${paymentStatusFilter}": ${uniqueOrders.length} -> ${finalOrders.length} orders`);
     }
     
     // Sort by delivery_time (HH:MM format, lexicographically safe)
@@ -644,7 +639,7 @@ async function getOrdersByISODate(targetISO, paymentStatusFilter = null) {
     
     return finalOrders;
   } catch (error) {
-    console.error('❌ [GET_ORDERS_BY_ISO_DATE] Error:', error);
+    logger.error('[GET_ORDERS_BY_ISO_DATE] Error:', error);
     throw error;
   }
 }
@@ -659,11 +654,11 @@ async function getOrdersByDate(targetDate, paymentStatusFilter = null) {
   // Normalize target date to ISO format (YYYY-MM-DD) in Asia/Jakarta
   const targetDateISO = toISODateJakarta(targetDate);
   if (!targetDateISO) {
-    console.error(`❌ [GET_ORDERS_BY_DATE] Invalid target date: ${targetDate}`);
+    logger.error(`[GET_ORDERS_BY_DATE] Invalid target date: ${targetDate}`);
     throw new Error(`Invalid target date: ${targetDate}`);
   }
   
-  console.log(`[ORDERS_DATE] targetDate="${targetDate}" normalized="${targetDateISO}"`);
+  logger.debug(`[ORDERS_DATE] targetDate="${targetDate}" normalized="${targetDateISO}"`);
   
   // Use centralized filter function
   return await getOrdersByISODate(targetDateISO, paymentStatusFilter);
@@ -1139,7 +1134,7 @@ function getTomorrowDate() {
  */
 export async function handleRecapH1(chatId, userId, sendMessage) {
   try {
-    console.log(`🔍 [RECAP_H1] Command received - userId: ${userId}, chatId: ${chatId}`);
+    logger.debug(`[RECAP_H1] Command received - userId: ${userId}, chatId: ${chatId}`);
     
     // Check admin access
     if (!(await isAdmin(userId))) {
@@ -1149,26 +1144,19 @@ export async function handleRecapH1(chatId, userId, sendMessage) {
     
     // Get tomorrow's date
     const tomorrow = getTomorrowDate();
-    console.log(`🔍 [RECAP_H1] Fetching orders for tomorrow: ${tomorrow}`);
+    logger.debug(`[RECAP_H1] Fetching orders for tomorrow: ${tomorrow}`);
     
     // Get orders for tomorrow (filter by FULLPAID only)
     const orders = await getOrdersByDate(tomorrow, 'FULLPAID');
-    console.log(`✅ [RECAP_H1] Found ${orders.length} FULLPAID orders for ${tomorrow}`);
-    
-    // Log first 3 order IDs for sanity check
-    if (orders.length > 0) {
-      const orderIds = orders.slice(0, 3).map(o => o.id).join(', ');
-      console.log(`🔍 [RECAP_H1] First 3 order IDs: ${orderIds}`);
-    }
+    logger.debug(`[RECAP_H1] Found ${orders.length} FULLPAID orders for ${tomorrow}`);
     
     // Format and send recap message
     const message = formatRecapMessage(orders, tomorrow);
     await sendMessage(chatId, message);
     
-    console.log(`✅ [RECAP_H1] Recap sent successfully`);
+    logger.debug(`[RECAP_H1] Recap sent successfully`);
   } catch (error) {
-    console.error('❌ [RECAP_H1] Error:', error);
-    console.error('❌ [RECAP_H1] Stack:', error.stack);
+    logger.error('[RECAP_H1] Error:', error);
     await sendMessage(chatId, '❌ Terjadi kesalahan saat mengambil rekapan pesanan. Silakan coba lagi.');
   }
 }
@@ -1182,7 +1170,7 @@ export async function handleRecapH1(chatId, userId, sendMessage) {
  */
 export async function handleOrdersDate(chatId, userId, dateStr, sendMessage) {
   try {
-    console.log(`🔍 [ORDERS_DATE] Command received - userId: ${userId}, dateStr: "${dateStr}"`);
+    logger.debug(`[ORDERS_DATE] Command received - userId: ${userId}, dateStr: "${dateStr}"`);
     
     // Check admin access
     if (!(await isAdmin(userId))) {
@@ -1194,10 +1182,10 @@ export async function handleOrdersDate(chatId, userId, dateStr, sendMessage) {
     let targetDate;
     if (dateStr === 'today' || dateStr === 'hari ini') {
       targetDate = getTodayDate();
-      console.log(`[ORDERS_TODAY] todayISO=${targetDate}`);
+      logger.debug(`[ORDERS_TODAY] todayISO=${targetDate}`);
     } else if (dateStr === 'tomorrow' || dateStr === 'besok') {
       targetDate = getTomorrowDate();
-      console.log(`[ORDERS_TOMORROW] tomorrowISO=${targetDate}`);
+      logger.debug(`[ORDERS_TOMORROW] tomorrowISO=${targetDate}`);
     } else {
       // Validate and normalize date format
       // Accept YYYY-MM-DD, DD/MM/YYYY, or other formats (will be normalized)
@@ -1209,33 +1197,19 @@ export async function handleOrdersDate(chatId, userId, dateStr, sendMessage) {
       targetDate = normalized;
     }
     
-    console.log(`🔍 [ORDERS_DATE] Fetching orders for date: ${targetDate} (normalized)`);
+    logger.debug(`[ORDERS_DATE] Fetching orders for date: ${targetDate} (normalized)`);
     
     // Get orders for target date (filter by FULLPAID only)
     const orders = await getOrdersByDate(targetDate, 'FULLPAID');
-    console.log(`✅ [ORDERS_DATE] Found ${orders.length} FULLPAID orders for ${targetDate}`);
-    
-    // Debug logging
-    if (dateStr === 'today' || dateStr === 'hari ini') {
-      console.log(`[ORDERS_TODAY] todayISO=${targetDate} matched=${orders.length}`);
-    } else if (dateStr === 'tomorrow' || dateStr === 'besok') {
-      console.log(`[ORDERS_TOMORROW] tomorrowISO=${targetDate} matched=${orders.length}`);
-    }
-    
-    // Log first 3 order IDs for sanity check
-    if (orders.length > 0) {
-      const orderIds = orders.slice(0, 3).map(o => o.id).join(', ');
-      console.log(`🔍 [ORDERS_DATE] First 3 order IDs: ${orderIds}`);
-    }
+    logger.debug(`[ORDERS_DATE] Found ${orders.length} FULLPAID orders for ${targetDate}`);
     
     // Format and send list message
     const message = formatOrderListMessage(orders, targetDate);
     await sendMessage(chatId, message);
     
-    console.log(`✅ [ORDERS_DATE] Order list sent successfully`);
+    logger.debug(`[ORDERS_DATE] Order list sent successfully`);
   } catch (error) {
-    console.error('❌ [ORDERS_DATE] Error:', error);
-    console.error('❌ [ORDERS_DATE] Stack:', error.stack);
+    logger.error('[ORDERS_DATE] Error:', error);
     await sendMessage(chatId, '❌ Terjadi kesalahan saat mengambil daftar pesanan. Silakan coba lagi.');
   }
 }

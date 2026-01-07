@@ -483,7 +483,7 @@ app.post('/api/messages/whatsapp-manual', async (req, res) => {
       return res.status(400).json({ error: 'Missing "from" or "text" field' });
     }
 
-    console.log('💬 Manual WhatsApp message input:', { from, text });
+    logger.debug('Manual WhatsApp message input');
 
     // Create conversation ID from phone number
     const conversationId = `conv_whatsapp_${from.replace(/\D/g, '')}`;
@@ -502,7 +502,7 @@ app.post('/api/messages/whatsapp-manual', async (req, res) => {
     };
 
     await saveMessage(messageData);
-    console.log('💾 WhatsApp message saved to storage');
+    logger.debug('WhatsApp message saved to storage');
 
     res.json({
       success: true,
@@ -909,7 +909,7 @@ setInterval(() => {
   // In production, you might want to track timestamps
   if (before > 1000) {
     processedCallbacks.clear();
-    console.log(`🧹 [CALLBACK] Cleaned up processed callbacks cache`);
+    logger.debug(`[CALLBACK] Cleaned up processed callbacks cache`);
   }
 }, CALLBACK_CLEANUP_INTERVAL);
 
@@ -918,13 +918,12 @@ async function handleCallbackQuery(callbackQuery) {
   const chatId = message.chat.id;
   const messageId = message.message_id;
 
-  console.log('🔘 [CALLBACK] Callback query received:', data);
-  console.log('🔘 [CALLBACK] Chat ID:', chatId, 'Message ID:', messageId, 'Callback ID:', callbackId);
+  logger.debug('[CALLBACK] Callback query received');
 
   // Check if this callback was already processed (prevent Telegram retries)
   const callbackKey = `${callbackId}_${data}`;
   if (processedCallbacks.has(callbackKey)) {
-    console.log(`⚠️ [CALLBACK] Callback ${callbackId} already processed, ignoring duplicate`);
+    logger.debug(`[CALLBACK] Callback ${callbackId} already processed, ignoring duplicate`);
     // Still answer the callback to stop Telegram retry
     await answerCallbackQuery(callbackId);
     return;
@@ -936,43 +935,42 @@ async function handleCallbackQuery(callbackQuery) {
   try {
     // Answer callback query IMMEDIATELY to stop Telegram retry
     await answerCallbackQuery(callbackId);
-    console.log(`✅ [CALLBACK] Answered callback query ${callbackId} immediately`);
+    logger.debug(`[CALLBACK] Answered callback query ${callbackId} immediately`);
 
     if (data.startsWith('confirm_order_')) {
       const orderId = data.replace('confirm_order_', '');
-      console.log('🔘 [CALLBACK] Processing order confirmation for:', orderId);
+      logger.debug(`[CALLBACK] Processing order confirmation for: ${orderId}`);
       
       // Remove inline keyboard to prevent double-click
       try {
         await editMessageReplyMarkup(chatId, messageId, null);
-        console.log(`✅ [CALLBACK] Removed inline keyboard for order ${orderId}`);
+        logger.debug(`[CALLBACK] Removed inline keyboard for order ${orderId}`);
       } catch (error) {
-        console.warn(`⚠️ [CALLBACK] Could not remove keyboard (non-critical):`, error.message);
+        logger.warn(`[CALLBACK] Could not remove keyboard (non-critical):`, error.message);
       }
       
       await handleOrderConfirmation(chatId, orderId, messageId);
-      console.log(`✅ [CALLBACK] Order confirmation completed for ${orderId}, returning early`);
+      logger.debug(`[CALLBACK] Order confirmation completed for ${orderId}`);
       return; // CRITICAL: Return early to prevent any other processing
     } else if (data.startsWith('cancel_order_')) {
       const orderId = data.replace('cancel_order_', '');
-      console.log('🔘 [CALLBACK] Processing order cancellation for:', orderId);
+      logger.debug(`[CALLBACK] Processing order cancellation for: ${orderId}`);
       
       // Remove inline keyboard
       try {
         await editMessageReplyMarkup(chatId, messageId, null);
       } catch (error) {
-        console.warn(`⚠️ [CALLBACK] Could not remove keyboard (non-critical):`, error.message);
+        logger.warn(`[CALLBACK] Could not remove keyboard (non-critical):`, error.message);
       }
       
       await handleOrderCancellation(chatId, orderId, messageId);
-      console.log(`✅ [CALLBACK] Order cancellation completed for ${orderId}, returning early`);
+      logger.debug(`[CALLBACK] Order cancellation completed for ${orderId}`);
       return; // CRITICAL: Return early
     } else {
-      console.log('⚠️ [CALLBACK] Unknown callback data:', data);
+      logger.warn(`[CALLBACK] Unknown callback data: ${data}`);
     }
   } catch (error) {
-    console.error('❌ [CALLBACK] Error handling callback query:', error);
-    console.error(`❌ [CALLBACK] Stack:`, error.stack);
+    logger.error('[CALLBACK] Error handling callback query:', error);
     // Don't send error message to user to avoid "null" issues
   }
 }
@@ -1028,18 +1026,18 @@ function acquireOrderLock(orderId) {
   if (existingLock) {
     // Check if lock expired
     if (now - existingLock.timestamp < LOCK_TTL_MS) {
-      console.log(`🔒 [ORDER_LOCK] Order ${orderId} is already being processed (locked ${Math.floor((now - existingLock.timestamp) / 1000)}s ago)`);
+      logger.debug(`[ORDER_LOCK] Order ${orderId} is already being processed (locked ${Math.floor((now - existingLock.timestamp) / 1000)}s ago)`);
       return false; // Lock still active
     } else {
       // Lock expired, remove it
       orderFinalizationLocks.delete(orderId);
-      console.log(`🔓 [ORDER_LOCK] Lock for order ${orderId} expired, removing`);
+      logger.debug(`[ORDER_LOCK] Lock for order ${orderId} expired, removing`);
     }
   }
   
   // Acquire new lock
   orderFinalizationLocks.set(orderId, { timestamp: now });
-  console.log(`🔒 [ORDER_LOCK] Lock acquired for order ${orderId}`);
+  logger.debug(`[ORDER_LOCK] Lock acquired for order ${orderId}`);
   return true;
 }
 
@@ -1049,7 +1047,7 @@ function acquireOrderLock(orderId) {
  */
 function releaseOrderLock(orderId) {
   orderFinalizationLocks.delete(orderId);
-  console.log(`🔓 [ORDER_LOCK] Lock released for order ${orderId}`);
+  logger.debug(`[ORDER_LOCK] Lock released for order ${orderId}`);
 }
 
 /**
@@ -1065,7 +1063,7 @@ function cleanupExpiredLocks() {
     }
   }
   if (cleaned > 0) {
-    console.log(`🧹 [ORDER_LOCK] Cleaned up ${cleaned} expired lock(s)`);
+    logger.debug(`[ORDER_LOCK] Cleaned up ${cleaned} expired lock(s)`);
   }
 }
 
@@ -1080,18 +1078,18 @@ setInterval(cleanupExpiredLocks, 5 * 60 * 1000);
  * @returns {Object} Finalized order data or null if not found/already confirmed
  */
 async function finalizeOrder(orderId) {
-  console.log(`🔍 [FINALIZE_ORDER] Starting finalization for order: ${orderId}`);
+  logger.debug(`[FINALIZE_ORDER] Starting finalization for order: ${orderId}`);
   
   // Acquire lock to prevent concurrent processing
   if (!acquireOrderLock(orderId)) {
-    console.log(`⚠️ [FINALIZE_ORDER] Order ${orderId} is already being processed, skipping duplicate finalization`);
+    logger.debug(`[FINALIZE_ORDER] Order ${orderId} is already being processed, skipping duplicate finalization`);
     // Return existing order if available
     try {
       const { getOrderById } = await import('./google-sheets.js');
       const existingOrder = await getOrderById(orderId);
       return existingOrder;
     } catch (error) {
-      console.error(`❌ [FINALIZE_ORDER] Error getting existing order:`, error.message);
+      logger.error(`[FINALIZE_ORDER] Error getting existing order:`, error.message);
       return null;
     }
   }
@@ -1110,17 +1108,17 @@ async function finalizeOrder(orderId) {
     }
 
     if (!order) {
-      console.log(`❌ [FINALIZE_ORDER] Order ${orderId} not found in Orders or WaitingList`);
+      logger.warn(`[FINALIZE_ORDER] Order ${orderId} not found in Orders or WaitingList`);
       return null;
     }
 
     // Check if order is already confirmed (idempotency check)
     if (order.status === 'confirmed') {
-      console.log(`⚠️ [FINALIZE_ORDER] Order ${orderId} is already confirmed, skipping duplicate finalization`);
+      logger.debug(`[FINALIZE_ORDER] Order ${orderId} is already confirmed, skipping duplicate finalization`);
       return order; // Return existing order
     }
 
-    console.log(`✅ [FINALIZE_ORDER] Order ${orderId} found, status: ${order.status}, isWaitingList: ${isWaitingListOrder}`);
+    logger.debug(`[FINALIZE_ORDER] Order ${orderId} found, status: ${order.status}, isWaitingList: ${isWaitingListOrder}`);
 
     // Normalize event_date to YYYY-MM-DD format before finalizing
     const { normalizeEventDate } = await import('./date-utils.js');
@@ -1129,10 +1127,10 @@ async function finalizeOrder(orderId) {
         const originalEventDate = order.event_date;
         order.event_date = normalizeEventDate(order.event_date);
         if (order.event_date !== originalEventDate) {
-          console.log(`🔍 [FINALIZE_ORDER] Event date normalized: "${originalEventDate}" → "${order.event_date}"`);
+          logger.debug(`[FINALIZE_ORDER] Event date normalized: "${originalEventDate}" → "${order.event_date}"`);
         }
       } catch (error) {
-        console.error(`❌ [FINALIZE_ORDER] Failed to normalize event_date "${order.event_date}":`, error.message);
+        logger.error(`[FINALIZE_ORDER] Failed to normalize event_date "${order.event_date}":`, error.message);
         // Don't fail finalization, but log the error
       }
     }
@@ -1146,15 +1144,15 @@ async function finalizeOrder(orderId) {
         if (typeof originalDeliveryTime === 'string' && originalDeliveryTime.trim()) {
           order.delivery_time = normalizeDeliveryTime(originalDeliveryTime);
           if (order.delivery_time !== originalDeliveryTime) {
-            console.log(`🔍 [FINALIZE_ORDER] Delivery time normalized: "${originalDeliveryTime}" → "${order.delivery_time}"`);
+            logger.debug(`[FINALIZE_ORDER] Delivery time normalized: "${originalDeliveryTime}" → "${order.delivery_time}"`);
           }
         } else {
           // Invalid or empty delivery_time, clear it
-          console.warn(`⚠️ [FINALIZE_ORDER] Invalid delivery_time format: "${originalDeliveryTime}", clearing it`);
+          logger.warn(`[FINALIZE_ORDER] Invalid delivery_time format: "${originalDeliveryTime}", clearing it`);
           order.delivery_time = '';
         }
       } catch (error) {
-        console.error(`❌ [FINALIZE_ORDER] Failed to normalize delivery_time "${order.delivery_time}":`, error.message);
+        logger.error(`[FINALIZE_ORDER] Failed to normalize delivery_time "${order.delivery_time}":`, error.message);
         // Clear invalid delivery_time to prevent issues in invoice formatting
         order.delivery_time = '';
       }
@@ -1163,34 +1161,33 @@ async function finalizeOrder(orderId) {
     // Update order status to "confirmed" in the appropriate sheet
     if (isWaitingListOrder) {
       await updateWaitingListOrderStatus(orderId, 'confirmed');
-      console.log(`✅ [FINALIZE_ORDER] Updated WaitingList order status to confirmed`);
+      logger.debug(`[FINALIZE_ORDER] Updated WaitingList order status to confirmed`);
     } else {
       await updateOrderStatus(orderId, 'confirmed');
-      console.log(`✅ [FINALIZE_ORDER] Updated Orders sheet order status to confirmed`);
+      logger.debug(`[FINALIZE_ORDER] Updated Orders sheet order status to confirmed`);
     }
 
     // Ensure order exists in Orders sheet (UPSERT - update if exists, append if not)
     // saveOrder() now implements upsert internally, so we can call it safely
-    console.log(`📝 [FINALIZE_ORDER] Upserting order ${orderId} to Orders sheet...`);
+    logger.debug(`[FINALIZE_ORDER] Upserting order ${orderId} to Orders sheet...`);
     order.status = 'confirmed';
     await saveOrder(order, { skipDuplicateCheck: true }); // skipDuplicateCheck because we have lock + upsert handles it
-    console.log(`✅ [FINALIZE_ORDER] Order upserted to Orders sheet (update if exists, append if not)`);
+    logger.debug(`[FINALIZE_ORDER] Order upserted to Orders sheet`);
 
     // NOTE: Reminders are NO LONGER created at order finalization time.
     // They are handled by the daily job (runDailyRemindersJob) which reads Orders once per day.
     // This reduces Google Sheets READ requests and avoids 429 rate limits.
     if (order.event_date) {
-      console.log(`ℹ️ [FINALIZE_ORDER] Reminder will be processed by daily job (event_date: ${order.event_date})`);
+      logger.debug(`[FINALIZE_ORDER] Reminder will be processed by daily job (event_date: ${order.event_date})`);
     }
 
     // Update order status in memory
     order.status = 'confirmed';
     
-    console.log(`✅ [FINALIZE_ORDER] Order ${orderId} finalized successfully`);
+    logger.debug(`[FINALIZE_ORDER] Order ${orderId} finalized successfully`);
     return order;
   } catch (error) {
-    console.error(`❌ [FINALIZE_ORDER] Error finalizing order ${orderId}:`, error);
-    console.error(`❌ [FINALIZE_ORDER] Stack:`, error.stack);
+    logger.error(`[FINALIZE_ORDER] Error finalizing order ${orderId}:`, error);
     throw error;
   } finally {
     // Always release lock, even on error
@@ -1204,12 +1201,12 @@ async function finalizeOrder(orderId) {
  * All order finalization goes through finalizeOrder() which has locking
  */
 async function handleOrderConfirmation(chatId, orderId, messageId) {
-  console.log(`🔘 [ORDER_CONFIRM] Starting confirmation - Order ID: ${orderId}, Chat ID: ${chatId}, Message ID: ${messageId}`);
+  logger.debug(`[ORDER_CONFIRM] Starting confirmation - Order ID: ${orderId}, Chat ID: ${chatId}, Message ID: ${messageId}`);
   
   // Prevent duplicate processing (in-memory guard - additional safety)
   const confirmationKey = `${orderId}_${messageId}`;
   if (processedConfirmations.has(confirmationKey)) {
-    console.log(`⚠️ [ORDER_CONFIRM] Order confirmation already processed (in-memory), skipping: ${orderId}`);
+    logger.debug(`[ORDER_CONFIRM] Order confirmation already processed (in-memory), skipping: ${orderId}`);
     return;
   }
   processedConfirmations.add(confirmationKey);
@@ -1223,7 +1220,7 @@ async function handleOrderConfirmation(chatId, orderId, messageId) {
   // Additional guard: Check if invoice was already sent for this order (within last 10 seconds)
   const invoiceSent = sentInvoices.get(orderId);
   if (invoiceSent && (Date.now() - invoiceSent.sentAt) < 10000) {
-    console.log(`⚠️ [ORDER_CONFIRM] Invoice already sent for order ${orderId} (within last 10s), skipping duplicate send`);
+    logger.debug(`[ORDER_CONFIRM] Invoice already sent for order ${orderId} (within last 10s), skipping duplicate send`);
     return;
   }
 
@@ -1247,14 +1244,13 @@ async function handleOrderConfirmation(chatId, orderId, messageId) {
 
     // Guard: Ensure invoice is valid before sending
     if (!invoice || typeof invoice !== 'string' || invoice.trim().length === 0) {
-      console.error('❌ [ORDER_CONFIRM] Invoice is invalid:', invoice);
+      logger.error('[ORDER_CONFIRM] Invoice is invalid:', invoice);
       await sendTelegramMessage(chatId, '❌ Terjadi kesalahan saat membuat invoice. Silakan hubungi admin.');
       return;
     }
 
     // Send invoice (ONLY ONCE) - This is the ONLY message sent on confirmation
-    console.log(`[CONFIRM] invoice=${orderId} sending=RECAP_ONLY`);
-    console.log('📄 [ORDER_CONFIRM] Sending invoice (recap) for order:', orderId);
+    logger.debug(`[CONFIRM] invoice=${orderId} sending=RECAP_ONLY`);
     await sendTelegramMessage(chatId, invoice);
     
     // Mark invoice as sent (with TTL for cleanup)
@@ -1272,12 +1268,10 @@ async function handleOrderConfirmation(chatId, orderId, messageId) {
     // Payment reminders are handled separately by the reminder system (H-4, H-3, H-1).
     // The recap message already contains payment instructions, so no separate payment message is needed.
     
-    console.log(`✅ [ORDER_CONFIRM] Order ${orderId} confirmation completed successfully`);
-    console.log(`✅ [ORDER_CONFIRM] Returning early to prevent any other processing`);
+    logger.debug(`[ORDER_CONFIRM] Order ${orderId} confirmation completed successfully`);
     return; // CRITICAL: Return early to prevent any other processing
   } catch (error) {
-    console.error('❌ [ORDER_CONFIRM] Error confirming order:', error);
-    console.error('❌ [ORDER_CONFIRM] Stack:', error.stack);
+    logger.error('[ORDER_CONFIRM] Error confirming order:', error);
     await sendTelegramMessage(chatId, '❌ Terjadi kesalahan saat mengkonfirmasi pesanan. Silakan coba lagi.');
     return; // CRITICAL: Return early even on error
   }
@@ -1399,9 +1393,9 @@ async function editMessageReplyMarkup(chatId, messageId, replyMarkup = null) {
       },
       body: JSON.stringify(payload),
     });
-    console.log('✅ [EDIT_KEYBOARD] Removed inline keyboard from message:', messageId);
+    logger.debug(`[EDIT_KEYBOARD] Removed inline keyboard from message: ${messageId}`);
   } catch (error) {
-    console.error('❌ [EDIT_KEYBOARD] Error editing message reply markup:', error);
+    logger.error('[EDIT_KEYBOARD] Error editing message reply markup:', error);
     // Non-critical, continue execution
   }
 }
@@ -1513,11 +1507,11 @@ async function handleTelegramCommand(message) {
   const normalizedCommand = normalizeCommand(rawCommand);
   
   // Log command received
-  console.log(`🤖 [COMMAND] Received - command: "${rawCommand}", normalized: "${normalizedCommand}", args: [${args.join(', ')}], payloadLength: ${payload.length}, chatType: ${chatType}, chatId: ${chatId}, userId: ${userId}`);
+  logger.debug(`[COMMAND] Received - command: "${normalizedCommand}", chatType: ${chatType}, chatId: ${chatId}, userId: ${userId}`);
   
   // If no valid command, handle as unknown
   if (!normalizedCommand) {
-    console.log(`⚠️ [COMMAND] Invalid or empty command, treating as unknown`);
+    logger.debug(`[COMMAND] Invalid or empty command, treating as unknown`);
     sendTelegramMessage(chatId, '❌ Command tidak dikenali. Ketik /help untuk daftar perintah.');
     return;
   }
@@ -1719,15 +1713,14 @@ async function handleTelegramCommand(message) {
       break;
     // Admin commands (PRD requirements)
     case '/new_order':
-      console.log(`🔍 [COMMAND] /new_order`);
+      logger.debug(`[COMMAND] /new_order`);
       handleNewOrder(chatId, userId, sendTelegramMessage).catch(error => {
-        console.error('❌ [COMMAND] Error in /new_order handler:', error);
-        console.error('❌ [COMMAND] Stack:', error.stack);
+        logger.error('[COMMAND] Error in /new_order handler:', error);
         sendTelegramMessage(chatId, '❌ Maaf, ada error saat memproses perintah ini. Coba lagi ya.');
       });
       break;
     case '/parse_order':
-      console.log(`🔍 [COMMAND] /parse_order`);
+      logger.debug(`[COMMAND] /parse_order`);
       const replyToMessage = message.reply_to_message;
       handleParseOrder(chatId, userId, messageText, sendTelegramMessage, replyToMessage).catch(error => {
         console.error('❌ [COMMAND] Error in /parse_order handler:', error);
@@ -1737,7 +1730,7 @@ async function handleTelegramCommand(message) {
       break;
     case '/order_detail': {
       const orderId = args[0];
-      console.log(`🔍 [COMMAND] /order_detail - orderId: ${orderId || 'MISSING'}`);
+      logger.debug(`[COMMAND] /order_detail - orderId: ${orderId || 'MISSING'}`);
       handleOrderDetail(chatId, userId, orderId, sendTelegramMessage).catch(error => {
         console.error('❌ [COMMAND] Error in /order_detail handler:', error);
         console.error('❌ [COMMAND] Stack:', error.stack);
@@ -1765,7 +1758,7 @@ async function handleTelegramCommand(message) {
       break;
     }
     case '/today_reminder': {
-      console.log(`🔍 [COMMAND] /today_reminder`);
+      logger.debug(`[COMMAND] /today_reminder`);
       isAdmin(userId).then(async (isUserAdmin) => {
         if (isUserAdmin) {
           await checkAndSendRemindersForToday(sendTelegramMessage);
@@ -1781,7 +1774,7 @@ async function handleTelegramCommand(message) {
       break;
     }
     case '/admin_auth': {
-      console.log(`🔍 [COMMAND] /admin_auth`);
+      logger.debug(`[COMMAND] /admin_auth`);
       handleAdminAuth(chatId, userId, messageText, sendTelegramMessage).catch(error => {
         console.error('❌ [COMMAND] Error in /admin_auth handler:', error);
         console.error('❌ [COMMAND] Stack:', error.stack);
@@ -1790,7 +1783,7 @@ async function handleTelegramCommand(message) {
       break;
     }
     case '/recap_h1': {
-      console.log(`🔍 [COMMAND] /recap_h1`);
+      logger.debug(`[COMMAND] /recap_h1`);
       handleRecapH1(chatId, userId, sendTelegramMessage).catch(error => {
         console.error('❌ [COMMAND] Error in /recap_h1 handler:', error);
         console.error('❌ [COMMAND] Stack:', error.stack);
@@ -1800,7 +1793,7 @@ async function handleTelegramCommand(message) {
     }
     case '/orders_date': {
       const dateStr = args[0];
-      console.log(`🔍 [COMMAND] /orders_date - dateStr: "${dateStr}"`);
+      logger.debug(`[COMMAND] /orders_date - dateStr: "${dateStr}"`);
       if (!dateStr) {
         sendTelegramMessage(chatId, '❌ Format: /orders_date YYYY-MM-DD\n\nContoh: /orders_date 2026-01-18\nAtau gunakan: /orders_today, /orders_tomorrow');
         break;
@@ -1813,7 +1806,7 @@ async function handleTelegramCommand(message) {
       break;
     }
     case '/orders_today': {
-      console.log(`🔍 [COMMAND] /orders_today`);
+      logger.debug(`[COMMAND] /orders_today`);
       handleOrdersDate(chatId, userId, 'today', sendTelegramMessage).catch(error => {
         console.error('❌ [COMMAND] Error in /orders_today handler:', error);
         console.error('❌ [COMMAND] Stack:', error.stack);
@@ -1822,7 +1815,7 @@ async function handleTelegramCommand(message) {
       break;
     }
     case '/orders_tomorrow': {
-      console.log(`🔍 [COMMAND] /orders_tomorrow`);
+      logger.debug(`[COMMAND] /orders_tomorrow`);
       handleOrdersDate(chatId, userId, 'tomorrow', sendTelegramMessage).catch(error => {
         console.error('❌ [COMMAND] Error in /orders_tomorrow handler:', error);
         console.error('❌ [COMMAND] Stack:', error.stack);
@@ -2047,7 +2040,7 @@ async function sendTelegramMessage(chatId, text, replyMarkup = null, replyToMess
           throw new Error(`Telegram API error: ${retryData.description}`);
         }
         
-        console.log('✅ Telegram message sent successfully (as plain text after markdown error):', retryData.result);
+        logger.debug('Telegram message sent successfully (as plain text after markdown error)');
         return retryData.result;
       }
       
@@ -2094,14 +2087,14 @@ async function sendTelegramMessage(chatId, text, replyMarkup = null, replyToMess
           throw new Error(`Telegram API error: ${retryData.description}`);
         }
         
-        console.log('✅ Telegram message sent successfully (as plain text after markdown error):', retryData.result);
+        logger.debug('Telegram message sent successfully (as plain text after markdown error)');
         return retryData.result;
       }
       
       throw new Error(`Telegram API error: ${data.description}`);
     }
 
-    console.log('✅ Telegram message sent successfully:', data.result);
+    logger.debug('Telegram message sent successfully');
     return data.result;
   } catch (error) {
     // If it's a markdown parsing error, try one more time as plain text
@@ -2768,7 +2761,7 @@ app.listen(PORT, async () => {
     await initializeStorage();
     logger.info(`Google Sheets ready`);
   } catch (error) {
-    console.error(`⚠️  Google Sheets initialization failed:`, error.message);
+    logger.error('Google Sheets initialization failed:', error.message);
     console.log(`   Make sure GOOGLE_SERVICE_ACCOUNT_KEY_FILE and GOOGLE_SPREADSHEET_ID are set in .env`);
     console.log(`   Continuing without storage (messages stored in memory only)`);
   }
@@ -2780,8 +2773,7 @@ app.listen(PORT, async () => {
     // Automatically set webhook in production
     await setWebhook();
   } else {
-    console.log(`\n🔄 Development mode: Starting polling...`);
-    console.log(`   (This will automatically remove any existing webhook)`);
+    logger.info('Development mode: Starting polling...');
     startPolling();
   }
   
@@ -2791,17 +2783,17 @@ app.listen(PORT, async () => {
   // Initialize Reminders sheet
   try {
     await ensureRemindersSheet();
-    console.log('✅ Reminders sheet ready');
+    logger.info('Reminders sheet ready');
   } catch (error) {
-    console.error('⚠️ Reminders sheet initialization failed:', error.message);
+    logger.error('Reminders sheet initialization failed:', error.message);
   }
   
   // Ensure Orders sheet has payment headers
   try {
     await ensureOrdersPaymentHeaders();
-    console.log('✅ Orders payment headers ready');
+    logger.info('Orders payment headers ready');
   } catch (error) {
-    console.error('⚠️ Orders payment headers initialization failed:', error.message);
+    logger.error('Orders payment headers initialization failed:', error.message);
   }
   
   // Start reminder scheduler (check every 6 hours)
