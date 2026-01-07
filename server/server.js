@@ -9,7 +9,6 @@ import dotenv from 'dotenv';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import logger from './logger.js';
-import logger from './logger.js';
 import {
   initializeStorage,
   saveMessage,
