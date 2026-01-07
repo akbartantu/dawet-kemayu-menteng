@@ -541,6 +541,12 @@ export function formatOrderSummary(order) {
   if (order.delivery_time) {
     summary += `🕐 **Delivery Time:** ${order.delivery_time}\n`;
   }
+  if (order.delivery_method) {
+    const deliveryMethod = order.delivery_method === '-' 
+      ? '- (pilih: Pickup / GrabExpress / Custom)' 
+      : order.delivery_method;
+    summary += `🚚 **Delivery Method:** ${deliveryMethod}\n`;
+  }
 
   if (order.items.length > 0) {
     summary += `\n📦 **Items:**\n`;
