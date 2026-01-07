@@ -4,7 +4,7 @@
  * Implements PRD reminder requirements
  */
 
-import { getAllOrders, getOrderById } from './google-sheets.js';
+import { getAllOrders, getOrderById, getAdminChatIds } from './google-sheets.js';
 import { google } from 'googleapis';
 import dotenv from 'dotenv';
 
@@ -646,6 +646,306 @@ export async function sendReminderToAdmin(order, reminderType, sendMessage) {
     return true;
   } catch (error) {
     return false;
+  }
+}
+
+/**
+ * Run daily reminders job (quota-friendly, reads Orders and Reminders once)
+ * Algorithm:
+ * 1. Get today's date in Asia/Jakarta
+ * 2. Read Orders ONCE (filter orders with event_date in [today+1 .. today+4])
+ * 3. Read Reminders ONCE (build idempotency set)
+ * 4. For each eligible order, determine reminder type and send if not already sent
+ * 5. Append reminder log row only when sending (treat Reminders as send log)
+ * 
+ * @param {Function} sendMessage - Function to send Telegram message
+ * @param {Date} todayOverride - Optional date override for testing
+ */
+export async function runDailyRemindersJob(sendMessage, todayOverride = null) {
+  try {
+    const { getTodayJakarta, getDaysDiffJakarta } = await import('./date-utils.js');
+    const { getAllOrders } = await import('./google-sheets.js');
+    const { formatPrice } = await import('./price-calculator.js');
+    
+    // Get today's date in Asia/Jakarta
+    const today = todayOverride ? getTodayJakarta(todayOverride) : getTodayJakarta();
+    console.log(`🔄 [DAILY_REMINDERS] Starting daily job for ${today}`);
+    
+    // STEP 1: Read Orders ONCE (minimal reads)
+    console.log(`📖 [DAILY_REMINDERS] Reading Orders sheet (once)...`);
+    const allOrders = await getAllOrders(1000); // Read up to 1000 orders
+    
+    // Import normalizeEventDate for date normalization
+    const { normalizeEventDate } = await import('./date-utils.js');
+    
+    // Filter orders whose event_date is within [today+1 .. today+4] window
+    const eligibleOrders = [];
+    for (const order of allOrders) {
+      if (!order.event_date) continue;
+      
+      // Parse event_date (should be YYYY-MM-DD)
+      let eventDateStr = order.event_date;
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(eventDateStr)) {
+        // Try to normalize if not in YYYY-MM-DD format
+        try {
+          const normalized = normalizeEventDate(eventDateStr);
+          eventDateStr = normalized;
+          order.event_date = normalized; // Update in-place
+        } catch (e) {
+          continue; // Skip invalid dates
+        }
+      }
+      
+      const daysDiff = getDaysDiffJakarta(eventDateStr, todayOverride || new Date());
+      // Only include orders where reminder is due today (days_diff = 1, 3, or 4)
+      if (daysDiff !== null && (daysDiff === 1 || daysDiff === 3 || daysDiff === 4)) {
+        eligibleOrders.push(order);
+      }
+    }
+    
+    console.log(`✅ [DAILY_REMINDERS] Found ${eligibleOrders.length} eligible order(s) for today`);
+    
+    if (eligibleOrders.length === 0) {
+      console.log(`✅ [DAILY_REMINDERS] No reminders due today`);
+      return;
+    }
+    
+    // STEP 2: Read Reminders ONCE (anti-spam + idempotency sets)
+    console.log(`📖 [DAILY_REMINDERS] Reading Reminders sheet (once) for anti-spam and idempotency...`);
+    
+    // Read ALL reminders (not just today's) to build global per-invoice lock
+    const allReminders = await getAllReminders(); // Read all reminders
+    
+    // Build anti-spam set: invoices that have ANY SENT reminder (global lock)
+    const sentInvoiceSet = new Set();
+    for (const reminder of allReminders) {
+      if (reminder.status === 'SENT' && reminder.orderId) {
+        sentInvoiceSet.add(reminder.orderId);
+      }
+    }
+    
+    console.log(`✅ [DAILY_REMINDERS] Found ${sentInvoiceSet.size} invoice(s) with SENT reminders (anti-spam lock)`);
+    
+    // Build idempotency set for today: key = `${order_id}|${reminder_type}|${reminder_date}`
+    const sentKeys = new Set();
+    const todayReminders = allReminders.filter(r => r.reminderDate === today);
+    for (const reminder of todayReminders) {
+      if (reminder.status === 'SENT' || reminder.status === 'SKIPPED' || reminder.status === 'FAILED') {
+        const key = `${reminder.orderId}|${reminder.reminderType}|${reminder.reminderDate}`;
+        sentKeys.add(key);
+      }
+    }
+    
+    console.log(`✅ [DAILY_REMINDERS] Found ${sentKeys.size} already-processed reminder(s) for today in idempotency set`);
+    
+    // STEP 3: Process each eligible order
+    let sentCount = 0;
+    let skippedCount = 0;
+    let failedCount = 0;
+    
+    for (const order of eligibleOrders) {
+      try {
+        const eventDateStr = order.event_date;
+        const daysDiff = getDaysDiffJakarta(eventDateStr, todayOverride || new Date());
+        
+        // Determine reminder type based on days_diff
+        let reminderType = null;
+        if (daysDiff === 4) {
+          reminderType = 'H4_PAYMENT';
+        } else if (daysDiff === 3) {
+          reminderType = 'H3_ORDER_BAHAN';
+        } else if (daysDiff === 1) {
+          reminderType = 'H1_PREPARATION';
+        }
+        
+        if (!reminderType) {
+          continue; // Skip if no reminder type determined
+        }
+        
+        // ANTI-SPAM CHECK: If invoice has ANY SENT reminder, skip ALL future reminders
+        if (sentInvoiceSet.has(order.id)) {
+          console.log(`[REMINDER_SKIP] invoice=${order.id} reason="already_sent_once"`);
+          console.log(`⏭️ [DAILY_REMINDERS] Skipping ${order.id} ${reminderType} (invoice already has SENT reminder - anti-spam lock)`);
+          continue; // Skip without writing to Reminders sheet (quota-friendly)
+        }
+        
+        // Build idempotency key
+        const key = `${order.id}|${reminderType}|${today}`;
+        
+        // Check if already processed today
+        if (sentKeys.has(key)) {
+          console.log(`⏭️ [DAILY_REMINDERS] Skipping ${order.id} ${reminderType} (already processed today)`);
+          continue;
+        }
+        
+        // Special handling for H4_PAYMENT: skip if FULL PAID
+        if (reminderType === 'H4_PAYMENT') {
+          const paymentStatus = (order.payment_status || 'UNPAID').toUpperCase();
+          if (paymentStatus === 'FULL PAID' || paymentStatus === 'FULLPAID' || paymentStatus === 'PAID') {
+            console.log(`⏭️ [DAILY_REMINDERS] Skipping ${order.id} ${reminderType} (payment_status: ${paymentStatus})`);
+            
+            // Append SKIPPED log row
+            await saveReminder({
+              orderId: order.id,
+              reminderType: reminderType,
+              reminderDate: today,
+              status: 'SKIPPED',
+              attempts: 0,
+              notes: 'Skipped because FULL PAID',
+            });
+            
+            sentKeys.add(key); // Mark as processed
+            skippedCount++;
+            continue;
+          }
+        }
+        
+        // Render message by template
+        const message = getReminderMessage(order, reminderType);
+        
+        // ALL reminder types go to ALL active admins (from Users sheet)
+        // Send to all admins and get result summary
+        const sendResult = await sendReminderToAdmins(message, sendMessage);
+        
+        if (sendResult.success) {
+          // At least one admin received the message
+          const notes = sendResult.failCount > 0
+            ? `Sent to ${sendResult.successCount} admin(s), failed ${sendResult.failCount}`
+            : `Sent to ${sendResult.successCount} admin(s)`;
+          
+          // Append ONE SENT log row (not per admin)
+          await saveReminder({
+            orderId: order.id,
+            reminderType: reminderType,
+            reminderDate: today,
+            status: 'SENT',
+            sentAt: new Date().toISOString(),
+            attempts: 1,
+            lastAttemptAt: new Date().toISOString(),
+            notes: notes,
+          });
+          
+          sentKeys.add(key); // Mark as processed
+          sentCount++;
+        } else {
+          // No admins found or all sends failed
+          const errorMessage = sendResult.errorMessage || 'Unknown error';
+          
+          // Append ONE FAILED log row with specific error message
+          await saveReminder({
+            orderId: order.id,
+            reminderType: reminderType,
+            reminderDate: today,
+            status: 'FAILED',
+            attempts: 1,
+            lastAttemptAt: new Date().toISOString(),
+            notes: errorMessage.substring(0, 200), // Truncate if too long
+          });
+          
+          failedCount++;
+        }
+      } catch (error) {
+        console.error(`❌ [DAILY_REMINDERS] Error processing order ${order.id}:`, error);
+        failedCount++;
+      }
+    }
+    
+    console.log(`✅ [DAILY_REMINDERS] Job completed: ${sentCount} sent, ${skippedCount} skipped, ${failedCount} failed`);
+  } catch (error) {
+    console.error('❌ [DAILY_REMINDERS] Fatal error in daily job:', error);
+    console.error('❌ [DAILY_REMINDERS] Stack:', error.stack);
+  }
+}
+
+/**
+ * Get ALL reminders from Reminders sheet (for anti-spam check)
+ * Reads entire Reminders sheet once
+ * @returns {Promise<Array>} Array of all reminder objects
+ */
+async function getAllReminders() {
+  try {
+    await ensureRemindersSheet();
+    
+    const { getSheetHeaderMap } = await import('./google-sheets.js');
+    const headerMap = await getSheetHeaderMap(REMINDERS_SHEET, { requireSnakeCase: false });
+    
+    // Retry wrapper for 429 errors (reuse from google-sheets.js pattern)
+    const retryWithBackoff = async (fn, maxAttempts = 5) => {
+      let attempt = 0;
+      const baseDelay = 500;
+      
+      while (attempt < maxAttempts) {
+        try {
+          return await fn();
+        } catch (error) {
+          attempt++;
+          const isRateLimit = error.code === 429 || 
+                             error.message?.includes('rateLimitExceeded') ||
+                             error.message?.includes('429') ||
+                             (error.response?.status === 429);
+          
+          if (!isRateLimit || attempt >= maxAttempts) {
+            if (isRateLimit && attempt >= maxAttempts) {
+              const userError = new Error('⚠️ Sistem sedang kena limit Google Sheets (429). Coba lagi 1–2 menit ya.');
+              userError.isRateLimit = true;
+              throw userError;
+            }
+            throw error;
+          }
+          
+          const delay = baseDelay * Math.pow(2, attempt - 1);
+          const jitter = Math.random() * 250;
+          const retryAfter = error.response?.headers?.['retry-after'];
+          const finalDelay = retryAfter ? parseInt(retryAfter) * 1000 : delay + jitter;
+          
+          console.warn(`⚠️ [RETRY] Rate limit (429) on attempt ${attempt}/${maxAttempts}, waiting ${Math.round(finalDelay)}ms...`);
+          await new Promise(resolve => setTimeout(resolve, finalDelay));
+        }
+      }
+    };
+    
+    // Read ALL reminders (read entire sheet)
+    const response = await retryWithBackoff(async () => {
+      return await sheets.spreadsheets.values.get({
+        spreadsheetId: SPREADSHEET_ID,
+        range: `${REMINDERS_SHEET}!A2:ZZ`, // Start from row 2 (skip header)
+      });
+    });
+    
+    const rows = response.data.values || [];
+    
+    if (rows.length === 0) {
+      return [];
+    }
+    
+    // Map rows to reminder objects
+    const reminders = rows.map((row, index) => {
+      const getValue = (key, defaultValue = '') => {
+        const colIndex = headerMap[key];
+        if (colIndex === undefined) {
+          return defaultValue;
+        }
+        return row[colIndex] !== undefined && row[colIndex] !== '' ? row[colIndex] : defaultValue;
+      };
+      
+      return {
+        id: getValue('reminder_id', `temp_${index + 2}`),
+        orderId: getValue('order_id', ''),
+        reminderType: getValue('reminder_type', ''),
+        reminderDate: getValue('reminder_date', ''),
+        status: getValue('status', ''),
+        sentAt: getValue('sent_at', ''),
+        attempts: parseInt(getValue('attempts', '0')) || 0,
+        lastAttemptAt: getValue('last_attempt_at', ''),
+        createdAt: getValue('created_at', ''),
+        notes: getValue('notes', ''),
+      };
+    });
+    
+    return reminders;
+  } catch (error) {
+    console.error('❌ [GET_ALL_REMINDERS] Error reading reminders:', error);
+    return []; // Return empty array on error (fail gracefully)
   }
 }
 
