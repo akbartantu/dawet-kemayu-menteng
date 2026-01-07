@@ -975,19 +975,43 @@ export function parseOrderMessageV2(messageText) {
       continue;
     }
 
-    // Parse Biaya Pengiriman (Rp) - store as delivery_fee
-    if (line.match(/^Biaya\s+Pengiriman\s*\(Rp\)\s*:?\s*(.+)$/i)) {
-      const cost = line.replace(/^Biaya\s+Pengiriman\s*\(Rp\)\s*:?\s*/i, '').trim();
-      if (cost && cost !== '-') {
-        // Extract numeric value
-        const costNum = cost.replace(/[^\d]/g, '');
-        if (costNum) {
-          const deliveryFee = parseInt(costNum, 10);
-          if (!isNaN(deliveryFee) && deliveryFee >= 0) {
-            order.delivery_fee = deliveryFee;
-            console.log(`✅ [PARSE_V2] Extracted delivery_fee: Rp ${deliveryFee}`);
-          }
+    // Parse Biaya Pengiriman (Rp) - store as delivery_fee with validation
+    // Accepts: "Biaya Pengiriman (Rp):", "Biaya Pengiriman:", "Ongkir:", "Delivery Fee:"
+    if (line.match(/^(?:Biaya\s+Pengiriman\s*\(Rp\)|Biaya\s+Pengiriman|Ongkir|Delivery\s+Fee)\s*:?\s*(.+)$/i)) {
+      const originalLine = line;
+      const cost = line.replace(/^(?:Biaya\s+Pengiriman\s*\(Rp\)|Biaya\s+Pengiriman|Ongkir|Delivery\s+Fee)\s*:?\s*/i, '').trim();
+      
+      console.log(`[TRACE delivery_fee] parsed.delivery_fee raw_line="${originalLine}"`);
+      
+      if (!cost || cost === '-') {
+        // Field exists but is empty
+        order.delivery_fee = 0;
+        order.delivery_fee_source = 'USER_EMPTY';
+        console.log(`[TRACE delivery_fee] parsed.delivery_fee=0 (source: USER_EMPTY)`);
+      } else {
+        // Remove "Rp", spaces, dots, commas (thousand separators)
+        const costNum = cost.replace(/Rp/gi, '').replace(/\s/g, '').replace(/\./g, '').replace(/,/g, '');
+        
+        if (!costNum || costNum.length === 0) {
+          // Non-numeric value - THROW ERROR
+          const error = new Error(`Biaya Pengiriman harus berupa angka. Contoh: 100000`);
+          error.field = 'delivery_fee';
+          error.originalValue = cost;
+          throw error;
         }
+        
+        const deliveryFee = parseInt(costNum, 10);
+        if (isNaN(deliveryFee) || deliveryFee < 0) {
+          // Invalid number - THROW ERROR
+          const error = new Error(`Biaya Pengiriman harus berupa angka. Contoh: 100000`);
+          error.field = 'delivery_fee';
+          error.originalValue = cost;
+          throw error;
+        }
+        
+        order.delivery_fee = deliveryFee;
+        order.delivery_fee_source = 'USER_INPUT';
+        console.log(`[TRACE delivery_fee] parsed.delivery_fee=${deliveryFee} (source: USER_INPUT)`);
       }
       continue;
     }
