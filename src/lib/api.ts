@@ -226,3 +226,21 @@ export async function updateOrderStatus(orderId: string, status: string) {
     throw error;
   }
 }
+
+/**
+ * Get orders by event date (for today/tomorrow filtering)
+ */
+export async function getOrdersByEventDate(eventDate: string) {
+  try {
+    const response = await fetch(`${API_BASE_URL}/api/orders?eventDate=${eventDate}`);
+    if (!response.ok) {
+      throw new Error('Failed to fetch orders by event date');
+    }
+    return await response.json();
+  } catch (error: any) {
+    if (error.name === 'TypeError' && error.message.includes('fetch')) {
+      throw new Error('Dashboard cannot reach backend API. Please check API URL or backend status.');
+    }
+    throw error;
+  }
+}

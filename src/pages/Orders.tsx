@@ -105,6 +105,35 @@ export default function Orders() {
     return items.map(item => `${item.quantity}x ${item.name}`).join(", ");
   };
 
+  // Calculate total cups from items (for packaging calculation)
+  const calculateTotalCups = (items: any[]): number => {
+    if (!items || items.length === 0) return 0;
+    let totalCups = 0;
+    items.forEach(item => {
+      const itemName = (item.name || '').toLowerCase();
+      // Check if item is a cup-based product (Dawet Small/Medium/Large)
+      if (itemName.includes('dawet') && 
+          (itemName.includes('small') || itemName.includes('medium') || itemName.includes('large'))) {
+        // Exclude botol items (they're not cups)
+        if (!itemName.includes('botol')) {
+          totalCups += parseInt(item.quantity || 0);
+        }
+      }
+    });
+    return totalCups;
+  };
+
+  // Check if packaging is requested (from notes)
+  const hasPackagingRequest = (notes: string[]): boolean => {
+    if (!notes || notes.length === 0) return false;
+    return notes.some(note => {
+      const noteLower = note.toLowerCase().trim();
+      return noteLower.includes('packaging styrofoam') && 
+             (noteLower.includes(': ya') || noteLower.includes(': yes') || 
+              noteLower === 'packaging styrofoam: ya' || noteLower === 'packaging styrofoam: yes');
+    });
+  };
+
   // Calculate total from items (if not provided)
   const calculateTotal = (order: any) => {
     // For now, we'll show total_items count
@@ -457,29 +486,83 @@ export default function Orders() {
                     <p className="text-foreground">{selectedOrder.delivery_time}</p>
                   </div>
                 )}
+                {selectedOrder.delivery_method && (
+                  <div>
+                    <p className="text-sm font-medium text-muted-foreground">Delivery Method</p>
+                    <p className="text-foreground">{selectedOrder.delivery_method}</p>
+                  </div>
+                )}
               </div>
               
               <div>
                 <p className="text-sm font-medium text-muted-foreground mb-2">Items</p>
                 <div className="space-y-2">
-                  {(selectedOrder.items || []).map((item: any, index: number) => (
-                    <div key={index} className="flex justify-between p-2 bg-muted rounded">
-                      <span>{item.quantity}x {item.name}</span>
-                    </div>
-                  ))}
+                  {(() => {
+                    const items = selectedOrder.items || [];
+                    const notes = selectedOrder.notes || [];
+                    const totalCups = calculateTotalCups(items);
+                    const packagingRequested = hasPackagingRequest(notes);
+                    const requiredPackagingBoxes = totalCups > 0 ? Math.ceil(totalCups / 50) : 0;
+                    let packagingShown = false;
+
+                    return (
+                      <>
+                        {/* Display regular items (excluding packaging items) */}
+                        {items.map((item: any, index: number) => {
+                          const itemName = (item.name || '').toLowerCase();
+                          // Skip packaging items (they'll be replaced with calculated quantity)
+                          if (itemName.includes('packaging') || itemName.includes('styrofoam')) {
+                            // If packaging is requested, show calculated quantity once
+                            if (packagingRequested && requiredPackagingBoxes > 0 && !packagingShown) {
+                              packagingShown = true;
+                              return (
+                                <div key={`packaging-${index}`} className="flex justify-between p-2 bg-muted rounded">
+                                  <span>{requiredPackagingBoxes}x Packaging Styrofoam (50 cup)</span>
+                                </div>
+                              );
+                            }
+                            // Skip original packaging item
+                            return null;
+                          }
+                          // Display other items normally
+                          return (
+                            <div key={index} className="flex justify-between p-2 bg-muted rounded">
+                              <span>{item.quantity}x {item.name}</span>
+                            </div>
+                          );
+                        })}
+                        {/* If packaging requested but not found in items, add it */}
+                        {packagingRequested && requiredPackagingBoxes > 0 && !packagingShown && (
+                          <div className="flex justify-between p-2 bg-muted rounded">
+                            <span>{requiredPackagingBoxes}x Packaging Styrofoam (50 cup)</span>
+                          </div>
+                        )}
+                      </>
+                    );
+                  })()}
                 </div>
               </div>
 
-              {(selectedOrder.notes || []).length > 0 && (
-                <div>
-                  <p className="text-sm font-medium text-muted-foreground mb-2">Notes</p>
-                  <div className="space-y-1">
-                    {selectedOrder.notes.map((note: string, index: number) => (
-                      <p key={index} className="text-sm text-foreground">• {note}</p>
-                    ))}
+              {/* Notes section - filter out Packaging Styrofoam notes */}
+              {(() => {
+                const filteredNotes = (selectedOrder.notes || []).filter((note: string) => {
+                  const noteLower = note.toLowerCase().trim();
+                  // Filter out packaging-related notes
+                  return !(noteLower.includes('packaging styrofoam') && 
+                          (noteLower.includes(': ya') || noteLower.includes(': yes') || 
+                           noteLower === 'packaging styrofoam: ya' || noteLower === 'packaging styrofoam: yes'));
+                });
+                return filteredNotes.length > 0 ? (
+                  <div>
+                    <p className="text-sm font-medium text-muted-foreground mb-2">Notes</p>
+                    <div className="space-y-1">
+                      {filteredNotes.map((note: string, index: number) => (
+                        <p key={index} className="text-sm text-foreground">• {note}</p>
+                      ))}
+                    </div>
                   </div>
-                </div>
-              )}
+                ) : null;
+              })()}
 
               {/* Price Breakdown Section - Always show if order has pricing data */}
               {(selectedOrder && (selectedOrder.total_amount !== undefined || selectedOrder.product_total !== undefined || selectedOrder.packaging_fee !== undefined || selectedOrder.delivery_fee !== undefined)) && (

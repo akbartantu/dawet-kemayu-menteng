@@ -375,7 +375,7 @@ export async function handleOrderDetail(chatId, userId, orderId, sendMessage) {
     
     if (order.event_name || order.event_date) {
       detail += `\n📅 **Event Info:**\n`;
-      detail += `Event: ${order.event_name || 'N/A'}\n`;
+      detail += `Event: ${order.event_name || '-'}\n`;
       if (order.event_date) {
         detail += `Date: ${order.event_date}\n`;
       }
@@ -387,11 +387,69 @@ export async function handleOrderDetail(chatId, userId, orderId, sendMessage) {
       }
     }
 
+    // Calculate total cups from items (for packaging calculation)
+    let totalCups = 0;
+    let hasPackagingInItems = false;
+    if (order.items && order.items.length > 0) {
+      order.items.forEach(item => {
+        const itemName = (item.name || '').toLowerCase();
+        // Check if packaging is already in items
+        if (itemName.includes('packaging') || itemName.includes('styrofoam')) {
+          hasPackagingInItems = true;
+          return;
+        }
+        // Check if item is a cup-based product (Dawet Small/Medium/Large)
+        if (itemName.includes('dawet') && 
+            (itemName.includes('small') || itemName.includes('medium') || itemName.includes('large'))) {
+          // Exclude botol items (they're not cups)
+          if (!itemName.includes('botol')) {
+            totalCups += parseInt(item.quantity || 0);
+          }
+        }
+      });
+    }
+    
+    // Check if packaging is requested in notes
+    const notes = order.notes || [];
+    const hasPackagingRequest = notes.some(note => {
+      const noteLower = String(note || '').toLowerCase().trim();
+      return noteLower.includes('packaging styrofoam') && 
+             (noteLower.includes(': ya') || noteLower.includes(': yes') || 
+              noteLower === 'packaging styrofoam: ya' || noteLower === 'packaging styrofoam: yes');
+    });
+    
+    // Calculate required packaging boxes (1 box per 50 cups, rounded up)
+    const requiredPackagingBoxes = hasPackagingRequest && totalCups > 0 ? Math.ceil(totalCups / 50) : 0;
+
     detail += `\n📦 **Items:**\n`;
     if (order.items && order.items.length > 0) {
-      order.items.forEach((item, index) => {
-        detail += `${index + 1}. ${item.quantity}x ${item.name}\n`;
+      let itemIndex = 1;
+      let packagingShown = false;
+      
+      order.items.forEach((item) => {
+        const itemName = (item.name || '').toLowerCase();
+        
+        // Skip packaging items (they'll be replaced with calculated quantity)
+        if (itemName.includes('packaging') || itemName.includes('styrofoam')) {
+          // If packaging is requested, show calculated quantity once
+          if (hasPackagingRequest && requiredPackagingBoxes > 0 && !packagingShown) {
+            detail += `${itemIndex}. ${requiredPackagingBoxes}x Packaging Styrofoam (50 cup)\n`;
+            packagingShown = true;
+            itemIndex++;
+          }
+          // Skip original packaging item
+          return;
+        }
+        
+        // Display other items normally
+        detail += `${itemIndex}. ${item.quantity}x ${item.name}\n`;
+        itemIndex++;
       });
+      
+      // If packaging requested but not found in items, add it
+      if (hasPackagingRequest && requiredPackagingBoxes > 0 && !packagingShown) {
+        detail += `${itemIndex}. ${requiredPackagingBoxes}x Packaging Styrofoam (50 cup)\n`;
+      }
     } else {
       detail += `Tidak ada items\n`;
     }
@@ -404,8 +462,17 @@ export async function handleOrderDetail(chatId, userId, orderId, sendMessage) {
       detail += `**Total Amount: Rp ${formatPrice(totalAmount)}**\n`;
     }
     
-    if (order.notes && order.notes.length > 0) {
-      detail += `\n📝 **Notes:**\n${order.notes.join('\n')}\n`;
+    // Filter out packaging-related notes
+    const filteredNotes = notes.filter(note => {
+      const noteLower = String(note || '').toLowerCase().trim();
+      // Filter out packaging-related notes
+      return !(noteLower.includes('packaging styrofoam') && 
+               (noteLower.includes(': ya') || noteLower.includes(': yes') || 
+                noteLower === 'packaging styrofoam: ya' || noteLower === 'packaging styrofoam: yes'));
+    });
+    
+    if (filteredNotes.length > 0) {
+      detail += `\n📝 **Notes:**\n${filteredNotes.join('\n')}\n`;
     }
     
     if (order.created_at) {

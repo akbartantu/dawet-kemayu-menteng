@@ -2179,6 +2179,7 @@ app.get('/api/orders', async (req, res) => {
     const search = req.query.search; // Search by customer name, phone, or order ID
     const startDate = req.query.startDate;
     const endDate = req.query.endDate;
+    const eventDate = req.query.eventDate; // Filter by event_date (for today/tomorrow)
     
     let orders = await getAllOrders(1000); // Get more than limit to filter
     
@@ -2198,7 +2199,27 @@ app.get('/api/orders', async (req, res) => {
       );
     }
     
-    // Filter by date range
+    // Filter by event_date (for today/tomorrow orders)
+    if (eventDate) {
+      orders = orders.filter(order => {
+        if (!order.event_date) return false;
+        // Normalize both dates to YYYY-MM-DD for comparison
+        const orderEventDate = order.event_date.toString().trim();
+        const targetDate = eventDate.toString().trim();
+        // Handle both YYYY-MM-DD and DD/MM/YYYY formats
+        if (orderEventDate === targetDate) return true;
+        // Try to normalize DD/MM/YYYY to YYYY-MM-DD
+        const ddmmyyyyMatch = orderEventDate.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+        if (ddmmyyyyMatch) {
+          const [, day, month, year] = ddmmyyyyMatch;
+          const normalized = `${year}-${month}-${day}`;
+          return normalized === targetDate;
+        }
+        return false;
+      });
+    }
+    
+    // Filter by date range (created_at)
     if (startDate || endDate) {
       orders = orders.filter(order => {
         if (!order.created_at) return false;

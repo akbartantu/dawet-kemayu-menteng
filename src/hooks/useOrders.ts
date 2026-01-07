@@ -3,7 +3,7 @@
  */
 
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { getOrders, getOrder, updateOrderStatus } from '@/lib/api';
+import { getOrders, getOrder, updateOrderStatus, getOrdersByEventDate } from '@/lib/api';
 
 /**
  * Fetch all orders with filters
@@ -30,6 +30,18 @@ export function useOrder(orderId: string | null) {
     queryKey: ['order', orderId],
     queryFn: () => orderId ? getOrder(orderId) : null,
     enabled: !!orderId,
+  });
+}
+
+/**
+ * Fetch orders by event date (for today/tomorrow)
+ */
+export function useOrdersByEventDate(eventDate: string | null) {
+  return useQuery({
+    queryKey: ['orders', 'eventDate', eventDate],
+    queryFn: () => eventDate ? getOrdersByEventDate(eventDate) : { orders: [], count: 0 },
+    enabled: !!eventDate,
+    refetchInterval: 10000, // Refetch every 10 seconds
   });
 }
 
