@@ -525,7 +525,8 @@ async function handleTelegramMessage(message) {
   const userName = message.from?.first_name || message.from?.username || 'Unknown';
   const messageText = message.text || '';
   
-  console.log('💬 New Telegram message received:', {
+  // Log at debug level only (hidden in production by default)
+  logger.debug('💬 New Telegram message received:', {
     from: userName,
     userId: userId,
     chatId: chatId,
@@ -576,7 +577,7 @@ async function handleTelegramMessage(message) {
 
     // Save to storage
     await saveMessage(messageData);
-    console.log('💾 Telegram message saved to storage');
+    logger.debug('💾 Telegram message saved to storage');
 
     // Handle bot commands (works in both private and group chats)
     if (message.text?.startsWith('/')) {
@@ -1545,7 +1546,7 @@ async function handleTelegramCommand(message) {
         let parsedOrder;
         try {
           parsedOrder = parseOrderFromMessageAuto(payload);
-          console.log(`[PARSE] chat_id=${chatId} delivery_method="${parsedOrder.delivery_method || 'null'}"`);
+          logger.debug(`[PARSE] chat_id=${chatId} delivery_method="${parsedOrder.delivery_method || 'null'}"`);
         } catch (parseError) {
           // Handle parsing errors (e.g., invalid delivery_fee)
           if (parseError.field === 'delivery_fee' || parseError.field === 'shipping_fee') {
@@ -1842,7 +1843,7 @@ app.post('/api/messages/send', async (req, res) => {
       return res.status(400).json({ error: 'Missing "chatId" or "text" field' });
     }
 
-    console.log('📤 Sending Telegram message:', { chatId, text });
+    logger.debug('📤 Sending Telegram message:', { chatId, text });
 
     // Send message via Telegram Bot API
     const result = await sendTelegramMessage(chatId, text);
@@ -2406,9 +2407,9 @@ app.patch('/api/orders/:id/status', async (req, res) => {
         if (telegramChatId) {
           const notificationMessage = getStatusNotificationMessage(status, order);
           await sendTelegramMessage(telegramChatId, notificationMessage);
-          console.log(`📬 Status notification sent to customer for order ${orderId}`);
+          logger.debug(`📬 Status notification sent to customer for order ${orderId}`);
         } else {
-          console.log(`⚠️  Could not send notification for order ${orderId}: No Telegram chat ID found`);
+          logger.debug(`⚠️  Could not send notification for order ${orderId}: No Telegram chat ID found`);
         }
       } catch (error) {
         console.error(`❌ Error sending status notification for order ${orderId}:`, error);
@@ -2478,7 +2479,7 @@ async function findDeliveringOrdersForCustomer(conversationId) {
  */
 async function handleCustomerOrderCompletion(chatId, customerTelegramId, messageText) {
   try {
-    console.log('🔍 Customer completion request:', { chatId, customerTelegramId, messageText });
+    logger.debug('🔍 Customer completion request:', { chatId, customerTelegramId, messageText });
 
     // Get conversation to find customer's orders
     const conversation = await getOrCreateConversation(
@@ -2610,7 +2611,7 @@ async function handleCustomerOrderCompletion(chatId, customerTelegramId, message
       `Terima kasih atas kepercayaan Anda! 🙏`
     );
 
-    console.log(`✅ Customer ${chatId} completed order ${orderToComplete.id}`);
+    logger.debug(`✅ Customer ${chatId} completed order ${orderToComplete.id}`);
   } catch (error) {
     console.error('❌ Error handling customer order completion:', error);
     await sendTelegramMessage(

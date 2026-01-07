@@ -3363,7 +3363,8 @@ export async function getUserRole(platform, userId) {
       
       if (userIdMatch && platformMatch && rowIsActive) {
         const role = row[roleCol] || 'customer';
-        console.log(`✅ [USER_ROLE] Found user - platform: ${platform}, userId: ${userId}, role: ${role}, isActive: ${rowIsActive}`);
+        // Log at debug level only (hidden in production by default - contains sensitive user info)
+        logger.debug(`✅ [USER_ROLE] Found user - platform: ${platform}, userId: ${userId}, role: ${role}, isActive: ${rowIsActive}`);
         return role;
       }
     }
@@ -3470,7 +3471,7 @@ export async function upsertUserRole(platform, userId, displayName, role, isActi
           values: [rowData],
         },
       });
-      console.log(`✅ Updated user role: ${platform}:${userId} -> ${role}`);
+      logger.debug(`✅ Updated user role: ${platform}:${userId} -> ${role}`);
     } else {
       // Insert new user
       await sheets.spreadsheets.values.append({
@@ -3482,7 +3483,7 @@ export async function upsertUserRole(platform, userId, displayName, role, isActi
           values: [rowData],
         },
       });
-      console.log(`✅ Created user role: ${platform}:${userId} -> ${role}`);
+      logger.debug(`✅ Created user role: ${platform}:${userId} -> ${role}`);
     }
   } catch (error) {
     console.error('❌ Error upserting user role:', error.message);
@@ -3583,7 +3584,7 @@ export async function getAdminChatIds() {
         
         // Cache result
         adminChatIdsCache = { chatIds, fetchedAtMs: Date.now() };
-        console.log(`[ADMIN_RECIPIENTS] count=${chatIds.length}`);
+        logger.debug(`[ADMIN_RECIPIENTS] count=${chatIds.length}`);
         
         return chatIds;
       } finally {

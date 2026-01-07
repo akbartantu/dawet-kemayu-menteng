@@ -86,7 +86,7 @@ export async function handleAdminAuth(chatId, userId, messageText, sendMessage) 
       '• /today_reminder'
     );
     
-    console.log(`✅ Admin access granted to user ${userId} via /admin_auth`);
+    logger.debug(`✅ Admin access granted to user ${userId} via /admin_auth`);
   } catch (error) {
     console.error('❌ Error in handleAdminAuth:', error);
     await sendMessage(chatId, '❌ Terjadi kesalahan saat memberikan akses admin. Silakan coba lagi.');
@@ -316,12 +316,12 @@ export async function handleParseOrder(chatId, userId, messageText, sendMessage,
  * @param {Function} sendMessage - Function to send Telegram message
  */
 export async function handleOrderDetail(chatId, userId, orderId, sendMessage) {
-  console.log(`🔍 [ORDER_DETAIL] Command received - chatId: ${chatId}, userId: ${userId}, orderId: ${orderId || 'MISSING'}`);
+  logger.debug(`🔍 [ORDER_DETAIL] Command received - chatId: ${chatId}, userId: ${userId}, orderId: ${orderId || 'MISSING'}`);
   
   try {
     // Check admin access
     const isUserAdmin = await isAdmin(userId);
-    console.log(`🔍 [ORDER_DETAIL] Admin check - userId: ${userId}, isAdmin: ${isUserAdmin}`);
+    logger.debug(`🔍 [ORDER_DETAIL] Admin check - userId: ${userId}, isAdmin: ${isUserAdmin}`);
     
     if (!isUserAdmin) {
       await sendMessage(chatId, '❌ Anda tidak memiliki akses ke perintah ini. Perintah ini hanya untuk admin.');
@@ -468,7 +468,7 @@ export async function handleStatus(chatId, userId, orderId, sendMessage) {
  * @param {Function} sendMessage - Function to send Telegram message
  */
 export async function handlePay(chatId, userId, orderId, amountInput, sendMessage) {
-  console.log(`🔍 [PAY] Command received - chatId: ${chatId}, userId: ${userId}, orderId: ${orderId || 'MISSING'}, amountInput: ${amountInput || 'MISSING'}`);
+  logger.debug(`🔍 [PAY] Command received - chatId: ${chatId}, userId: ${userId}, orderId: ${orderId || 'MISSING'}, amountInput: ${amountInput || 'MISSING'}`);
   
   if (!(await requireAdmin(userId, sendMessage, chatId))) {
     await sendMessage(chatId, '❌ Anda tidak memiliki akses ke perintah ini.');
