@@ -1598,8 +1598,8 @@ async function handleTelegramCommand(message) {
             created_at: new Date().toISOString(),
           };
           
-          console.log(`[TRACE assign] order.delivery_method="${orderData.delivery_method || 'null'}"`);
-          console.log(`[PARSE] chat_id=${chatId} delivery_method="${parsedOrder.delivery_method || 'null'}"`);
+          logger.debug(`[TRACE assign] order.delivery_method="${orderData.delivery_method || 'null'}"`);
+          logger.debug(`[PARSE] chat_id=${chatId} delivery_method="${parsedOrder.delivery_method || 'null'}"`);
           
           // Check if order date is in the future
           const isFuture = isFutureDate(orderData.event_date);
@@ -2133,7 +2133,7 @@ async function sendTelegramMessage(chatId, text, replyMarkup = null, replyToMess
         throw new Error(`Telegram API error: ${retryData.description}`);
       }
       
-      console.log('✅ Telegram message sent successfully (as plain text after markdown error):', retryData.result);
+      logger.debug('✅ Telegram message sent successfully (as plain text after markdown error):', retryData.result);
       return retryData.result;
     }
     
