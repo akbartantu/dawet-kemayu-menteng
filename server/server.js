@@ -273,6 +273,11 @@ setInterval(() => {
  * Telegram sends messages to this endpoint when customers message the bot
  */
 app.post('/api/webhooks/telegram', async (req, res) => {
+  const update = req.body;
+  const chatId = update.message?.chat?.id || update.callback_query?.message?.chat?.id || 'unknown';
+  const textPreview = update.message?.text?.substring(0, 50) || update.callback_query?.data?.substring(0, 50) || 'no text';
+  console.log(`[RX] chat_id=${chatId} text_preview="${textPreview}"`);
+  
   console.log('📨 Received Telegram webhook:', JSON.stringify(req.body, null, 2));
 
   // Always respond 200 OK to Telegram immediately
@@ -297,6 +302,61 @@ app.post('/api/webhooks/telegram', async (req, res) => {
     console.error('❌ Error processing Telegram webhook:', error);
   }
 });
+
+/**
+ * Set webhook for production deployment
+ */
+async function setWebhook() {
+  const botToken = process.env.TELEGRAM_BOT_TOKEN;
+  
+  if (!botToken) {
+    console.log('⚠️  TELEGRAM_BOT_TOKEN not set. Cannot set webhook.');
+    return;
+  }
+
+  // Get webhook URL from environment variable or construct from Render URL
+  let webhookUrl = process.env.WEBHOOK_URL;
+  
+  // If WEBHOOK_URL not set, try to get from Render's RENDER_EXTERNAL_URL
+  if (!webhookUrl && process.env.RENDER_EXTERNAL_URL) {
+    webhookUrl = process.env.RENDER_EXTERNAL_URL;
+  }
+  
+  // If still not set, try to construct from common Render pattern
+  if (!webhookUrl && process.env.RENDER_SERVICE_NAME) {
+    webhookUrl = `https://${process.env.RENDER_SERVICE_NAME}.onrender.com`;
+  }
+
+  if (!webhookUrl) {
+    console.log('⚠️  WEBHOOK_URL not set. Cannot set webhook automatically.');
+    console.log('   Set WEBHOOK_URL environment variable to your Render app URL');
+    return;
+  }
+
+  try {
+    // Check if WEBHOOK_URL already includes the path
+    let webhookPath;
+    if (webhookUrl.includes('/api/webhooks/telegram')) {
+      // Already has the full path, use as-is
+      webhookPath = webhookUrl;
+    } else {
+      // Just the base URL, add the path
+      webhookPath = `${webhookUrl}/api/webhooks/telegram`;
+    }
+    
+    const url = `${TELEGRAM_API_BASE}${botToken}/setWebhook?url=${encodeURIComponent(webhookPath)}&drop_pending_updates=true`;
+    const response = await fetch(url);
+    const data = await response.json();
+
+    if (data.ok) {
+      console.log(`✅ Webhook set successfully: ${webhookPath}`);
+    } else {
+      console.error(`❌ Webhook setup failed: ${data.description || 'Unknown error'}`);
+    }
+  } catch (error) {
+    console.error('❌ Error setting webhook:', error.message);
+  }
+}
 
 /**
  * Delete webhook (needed before polling)
@@ -2713,6 +2773,12 @@ app.get('*', (req, res) => {
 
 // Start server
 app.listen(PORT, async () => {
+  console.log(`[BOOT] started`);
+  const renderUrl = process.env.RENDER_EXTERNAL_URL || process.env.WEBHOOK_URL || 'missing';
+  const mode = process.env.NODE_ENV === 'production' ? 'webhook' : 'polling';
+  console.log(`[BOOT] mode=${mode}`);
+  console.log(`[BOOT] render_url=${renderUrl}`);
+  
   console.log(`🚀 Server running on http://localhost:${PORT}`);
   console.log(`📡 Telegram webhook: http://localhost:${PORT}/api/webhooks/telegram`);
   console.log(`💬 Send Telegram: POST http://localhost:${PORT}/api/messages/send`);
@@ -2737,7 +2803,8 @@ app.listen(PORT, async () => {
   // In production, use webhook instead
   if (process.env.NODE_ENV === 'production') {
     console.log(`\n🌐 Production mode: Using webhook (polling disabled)`);
-    console.log(`   Make sure webhook is set: https://api.telegram.org/bot<TOKEN>/setWebhook?url=<YOUR_URL>/api/webhooks/telegram`);
+    // Automatically set webhook in production
+    await setWebhook();
   } else {
     console.log(`\n🔄 Development mode: Starting polling...`);
     console.log(`   (This will automatically remove any existing webhook)`);
