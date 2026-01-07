@@ -380,6 +380,9 @@ export async function handleOrderDetail(chatId, userId, orderId, sendMessage) {
       if (order.delivery_time) {
         detail += `Time: ${order.delivery_time}\n`;
       }
+      if (order.delivery_method || order.shipping_method) {
+        detail += `🚚 Delivery Method: ${order.delivery_method || order.shipping_method}\n`;
+      }
     }
 
     detail += `\n📦 **Items:**\n`;
