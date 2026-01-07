@@ -130,6 +130,7 @@ export function normalizeEventDate(input) {
   // Format as YYYY-MM-DD
   const formatted = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
   
+  console.log(`✅ [NORMALIZE_EVENT_DATE] "${trimmed}" → "${formatted}"`);
   return formatted;
 }
 
@@ -220,4 +221,244 @@ export function daysUntilDelivery(dateString) {
   const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
   
   return diffDays;
+}
+
+/**
+ * Get today's date in Asia/Jakarta timezone (date-only, YYYY-MM-DD)
+ * @param {Date} now - Optional Date object (defaults to current time)
+ * @returns {string} Date string in YYYY-MM-DD format
+ */
+export function getTodayJakarta(now = new Date()) {
+  // Format date in Asia/Jakarta timezone using Intl API
+  const formatter = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Jakarta',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  });
+  
+  // Format returns YYYY-MM-DD directly
+  return formatter.format(now);
+}
+
+/**
+ * Get days difference between event_date and today in Asia/Jakarta timezone
+ * Returns integer day difference: event_date - today_date
+ * 
+ * @param {string} eventDateISO - Event date in YYYY-MM-DD format
+ * @param {Date} now - Optional Date object (defaults to current time)
+ * @returns {number|null} Days difference (positive = future, negative = past), or null if invalid
+ */
+export function getDaysDiffJakarta(eventDateISO, now = new Date()) {
+  if (!eventDateISO || typeof eventDateISO !== 'string') {
+    return null;
+  }
+  
+  // Parse event_date (should be YYYY-MM-DD)
+  const eventDateMatch = eventDateISO.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (!eventDateMatch) {
+    console.warn(`[getDaysDiffJakarta] Invalid event_date format: ${eventDateISO}`);
+    return null;
+  }
+  
+  const eventYear = parseInt(eventDateMatch[1], 10);
+  const eventMonth = parseInt(eventDateMatch[2], 10) - 1; // Month is 0-indexed
+  const eventDay = parseInt(eventDateMatch[3], 10);
+  
+  // Get today's date in Asia/Jakarta
+  const todayStr = getTodayJakarta(now);
+  const todayMatch = todayStr.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (!todayMatch) {
+    console.error(`[getDaysDiffJakarta] Failed to parse today's date: ${todayStr}`);
+    return null;
+  }
+  
+  const todayYear = parseInt(todayMatch[1], 10);
+  const todayMonth = parseInt(todayMatch[2], 10) - 1;
+  const todayDay = parseInt(todayMatch[3], 10);
+  
+  // Create date objects (date-only, no time)
+  const eventDate = new Date(eventYear, eventMonth, eventDay);
+  const todayDate = new Date(todayYear, todayMonth, todayDay);
+  
+  // Validate dates
+  if (isNaN(eventDate.getTime()) || isNaN(todayDate.getTime())) {
+    console.warn(`[getDaysDiffJakarta] Invalid date: event=${eventDateISO}, today=${todayStr}`);
+    return null;
+  }
+  
+  // Calculate difference in whole days
+  const diffTime = eventDate.getTime() - todayDate.getTime();
+  const diffDays = Math.floor(diffTime / (1000 * 60 * 60 * 24));
+  
+  return diffDays;
+}
+
+/**
+ * Normalize any date value to ISO date string (YYYY-MM-DD) in Asia/Jakarta timezone
+ * Handles multiple input formats:
+ * - YYYY-MM-DD (already ISO)
+ * - DD/MM/YYYY
+ * - Google Sheets serial numbers
+ * - ISO strings with time
+ * - Date objects
+ * 
+ * @param {string|number|Date} value - Date value in various formats
+ * @returns {string|null} Normalized date in YYYY-MM-DD format (Asia/Jakarta), or null if invalid
+ */
+export function toISODateJakarta(value) {
+  if (!value && value !== 0) {
+    return null;
+  }
+  
+  // Handle Google Sheets serial numbers (numeric)
+  if (typeof value === 'number') {
+    // Google Sheets epoch is 1899-12-30, JavaScript epoch is 1970-01-01
+    // Offset: 25569 days difference
+    const sheetsEpochOffset = 25569;
+    const jsTimestamp = (value - sheetsEpochOffset) * 86400 * 1000;
+    const date = new Date(jsTimestamp);
+    if (isNaN(date.getTime())) {
+      return null;
+    }
+    // Format in Asia/Jakarta timezone
+    const formatter = new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'Asia/Jakarta',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    });
+    return formatter.format(date);
+  }
+  
+  // Handle Date objects
+  if (value instanceof Date) {
+    if (isNaN(value.getTime())) {
+      return null;
+    }
+    const formatter = new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'Asia/Jakarta',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    });
+    return formatter.format(value);
+  }
+  
+  // Handle strings
+  if (typeof value !== 'string') {
+    return null;
+  }
+  
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return null;
+  }
+  
+  // Already in YYYY-MM-DD format - return as-is (NO timezone conversion)
+  // This is critical: ISO date strings should NOT be converted via new Date()
+  // which can shift days due to timezone differences
+  if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
+    return trimmed;
+  }
+  
+  // Handle DD/MM/YYYY format
+  if (trimmed.includes('/')) {
+    const parts = trimmed.split('/').map(p => p.trim());
+    if (parts.length === 3) {
+      const day = parseInt(parts[0], 10);
+      const month = parseInt(parts[1], 10);
+      let year = parseInt(parts[2], 10);
+      
+      // Handle 2-digit years
+      if (year < 100) {
+        year += 2000;
+      }
+      
+      // Validate
+      if (isNaN(day) || isNaN(month) || isNaN(year) || day < 1 || day > 31 || month < 1 || month > 12) {
+        return null;
+      }
+      
+      // Format as YYYY-MM-DD
+      return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+    }
+  }
+  
+  // Try parsing as ISO string (may include time)
+  if (trimmed.includes('T') || trimmed.includes(' ')) {
+    const date = new Date(trimmed);
+    if (!isNaN(date.getTime())) {
+      const formatter = new Intl.DateTimeFormat('en-CA', {
+        timeZone: 'Asia/Jakarta',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+      });
+      return formatter.format(date);
+    }
+  }
+  
+  // Try standard Date parsing as last resort
+  const date = new Date(trimmed);
+  if (!isNaN(date.getTime())) {
+    const formatter = new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'Asia/Jakarta',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    });
+    return formatter.format(date);
+  }
+  
+  return null;
+}
+
+/**
+ * Get today's date in Asia/Jakarta timezone as ISO string (YYYY-MM-DD)
+ * @param {Date} now - Optional Date object (defaults to current time)
+ * @returns {string} Today's date in YYYY-MM-DD format
+ */
+export function getJakartaTodayISO(now = new Date()) {
+  return getTodayJakarta(now);
+}
+
+/**
+ * Add days to a date in Asia/Jakarta timezone
+ * @param {string} dateISO - Date in YYYY-MM-DD format
+ * @param {number} days - Number of days to add (can be negative)
+ * @returns {string|null} Result date in YYYY-MM-DD format, or null if invalid
+ */
+export function addDaysJakarta(dateISO, days) {
+  if (!dateISO || typeof dateISO !== 'string') {
+    return null;
+  }
+  
+  const match = dateISO.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) {
+    return null;
+  }
+  
+  const year = parseInt(match[1], 10);
+  const month = parseInt(match[2], 10) - 1; // Month is 0-indexed
+  const day = parseInt(match[3], 10);
+  
+  // Create date in UTC to avoid timezone issues when adding days
+  // Then format back in Asia/Jakarta
+  const date = new Date(Date.UTC(year, month, day));
+  if (isNaN(date.getTime())) {
+    return null;
+  }
+  
+  // Add days
+  date.setUTCDate(date.getUTCDate() + days);
+  
+  // Format in Asia/Jakarta timezone
+  const formatter = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Jakarta',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  });
+  return formatter.format(date);
 }

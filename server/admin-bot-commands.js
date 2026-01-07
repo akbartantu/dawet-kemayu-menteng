@@ -30,6 +30,11 @@ import {
   validatePaymentStatusTransition 
 } from './payment-tracker.js';
 import { updateOrderPayment } from './google-sheets.js';
+import { 
+  getJakartaTodayISO, 
+  addDaysJakarta, 
+  toISODateJakarta 
+} from './date-utils.js';
 
 /**
  * Handle /admin_auth command - Bootstrap admin using setup code
@@ -553,37 +558,45 @@ export async function handlePaymentStatus(chatId, userId, orderId, sendMessage) 
  * @param {string} paymentStatusFilter - Optional payment status filter (e.g., 'FULLPAID', 'PAID', 'UNPAID')
  * @returns {Promise<Array>} Array of orders sorted by delivery_time
  */
-async function getOrdersByDate(targetDate, paymentStatusFilter = null) {
+/**
+ * Get orders by ISO date (centralized filter function)
+ * @param {string} targetISO - Target date in YYYY-MM-DD format (must be normalized)
+ * @param {string} paymentStatusFilter - Optional payment status filter
+ * @returns {Promise<Array>} Array of orders matching the date
+ */
+async function getOrdersByISODate(targetISO, paymentStatusFilter = null) {
   try {
+    console.log(`[ORDERS_FILTER] targetISO="${targetISO}"`);
+    
     // Get all orders (we'll filter by date)
     const allOrders = await getAllOrders(10000); // Get large limit to ensure we get all orders
     
-    // Filter by event_date (must match exactly YYYY-MM-DD)
-    // Defensive: normalize dates to YYYY-MM-DD format for comparison
+    // Filter by event_date using centralized normalization
+    // Both targetISO and order.event_date are normalized to YYYY-MM-DD for comparison
     const filteredOrders = allOrders.filter(order => {
-      const orderDate = (order.event_date || '').trim();
+      const orderDate = order.event_date;
       if (!orderDate) return false;
       
-      // If already in YYYY-MM-DD format, compare directly
-      if (/^\d{4}-\d{2}-\d{2}$/.test(orderDate)) {
-        return orderDate === targetDate;
-      }
+      // Normalize order date to ISO format (handles DD/MM/YYYY, serial numbers, etc.)
+      // CRITICAL: If already ISO YYYY-MM-DD, return as-is (no timezone shift)
+      const normalizedOrderDate = toISODateJakarta(orderDate);
       
-      // Try to normalize other formats (defensive, but should not be needed)
-      // This handles legacy data if any exists
-      try {
-        const dateObj = new Date(orderDate);
-        if (isNaN(dateObj.getTime())) return false;
-        
-        const year = dateObj.getFullYear();
-        const month = String(dateObj.getMonth() + 1).padStart(2, '0');
-        const day = String(dateObj.getDate()).padStart(2, '0');
-        const normalized = `${year}-${month}-${day}`;
-        return normalized === targetDate;
-      } catch (e) {
+      if (!normalizedOrderDate) {
+        // Log for debugging but don't fail the filter
+        console.log(`[ORDERS_FILTER] raw="${orderDate}" normalized=null (skipping)`);
         return false;
       }
+      
+      // Compare normalized ISO dates
+      const matches = normalizedOrderDate === targetISO;
+      if (matches) {
+        console.log(`[ORDERS_FILTER] raw="${orderDate}" normalized="${normalizedOrderDate}" matched targetISO="${targetISO}"`);
+      }
+      
+      return matches;
     });
+    
+    console.log(`[ORDERS_FILTER] targetISO="${targetISO}" matched=${filteredOrders.length} total=${allOrders.length}`);
     
     // Remove duplicates by order_id (defensive - should not happen, but handle it)
     const uniqueOrders = [];
@@ -598,7 +611,7 @@ async function getOrdersByDate(targetDate, paymentStatusFilter = null) {
         uniqueOrders.push(order);
       } else {
         // Duplicate found - log warning
-        console.warn(`⚠️ [GET_ORDERS_BY_DATE] Duplicate order_id found: ${orderId} (skipping duplicate)`);
+        console.warn(`⚠️ [GET_ORDERS_BY_ISO_DATE] Duplicate order_id found: ${orderId} (skipping duplicate)`);
       }
     }
     
@@ -614,7 +627,7 @@ async function getOrdersByDate(targetDate, paymentStatusFilter = null) {
         }
         return orderPaymentStatus === filterUpper;
       });
-      console.log(`🔍 [GET_ORDERS_BY_DATE] Filtered by payment_status="${paymentStatusFilter}": ${uniqueOrders.length} -> ${finalOrders.length} orders`);
+      console.log(`🔍 [GET_ORDERS_BY_ISO_DATE] Filtered by payment_status="${paymentStatusFilter}": ${uniqueOrders.length} -> ${finalOrders.length} orders`);
     }
     
     // Sort by delivery_time (HH:MM format, lexicographically safe)
@@ -626,9 +639,29 @@ async function getOrdersByDate(targetDate, paymentStatusFilter = null) {
     
     return finalOrders;
   } catch (error) {
-    console.error('❌ [GET_ORDERS_BY_DATE] Error:', error);
+    console.error('❌ [GET_ORDERS_BY_ISO_DATE] Error:', error);
     throw error;
   }
+}
+
+/**
+ * Get orders by event date (legacy wrapper - now uses getOrdersByISODate)
+ * @param {string} targetDate - Date in YYYY-MM-DD format or other formats
+ * @param {string} paymentStatusFilter - Optional payment status filter
+ * @returns {Promise<Array>} Array of orders sorted by delivery_time
+ */
+async function getOrdersByDate(targetDate, paymentStatusFilter = null) {
+  // Normalize target date to ISO format (YYYY-MM-DD) in Asia/Jakarta
+  const targetDateISO = toISODateJakarta(targetDate);
+  if (!targetDateISO) {
+    console.error(`❌ [GET_ORDERS_BY_DATE] Invalid target date: ${targetDate}`);
+    throw new Error(`Invalid target date: ${targetDate}`);
+  }
+  
+  console.log(`[ORDERS_DATE] targetDate="${targetDate}" normalized="${targetDateISO}"`);
+  
+  // Use centralized filter function
+  return await getOrdersByISODate(targetDateISO, paymentStatusFilter);
 }
 
 /**
@@ -894,6 +927,7 @@ function formatRecapMessage(orders, date) {
  */
 function formatOrderListMessage(orders, date) {
   if (orders.length === 0) {
+    // Ensure consistent empty response format
     return `📅 Tidak ada pesanan untuk tanggal ${date}.`;
   }
   
@@ -1073,25 +1107,21 @@ function formatOrderListMessage(orders, date) {
  * Get today's date in YYYY-MM-DD format (local timezone)
  * @returns {string} Today's date
  */
+/**
+ * Get today's date in Asia/Jakarta timezone as ISO string (YYYY-MM-DD)
+ * @returns {string} Today's date in YYYY-MM-DD format
+ */
 function getTodayDate() {
-  const now = new Date();
-  const year = now.getFullYear();
-  const month = String(now.getMonth() + 1).padStart(2, '0');
-  const day = String(now.getDate()).padStart(2, '0');
-  return `${year}-${month}-${day}`;
+  return getJakartaTodayISO();
 }
 
 /**
- * Get tomorrow's date in YYYY-MM-DD format (local timezone)
- * @returns {string} Tomorrow's date
+ * Get tomorrow's date in Asia/Jakarta timezone as ISO string (YYYY-MM-DD)
+ * @returns {string} Tomorrow's date in YYYY-MM-DD format
  */
 function getTomorrowDate() {
-  const tomorrow = new Date();
-  tomorrow.setDate(tomorrow.getDate() + 1);
-  const year = tomorrow.getFullYear();
-  const month = String(tomorrow.getMonth() + 1).padStart(2, '0');
-  const day = String(tomorrow.getDate()).padStart(2, '0');
-  return `${year}-${month}-${day}`;
+  const todayISO = getJakartaTodayISO();
+  return addDaysJakarta(todayISO, 1);
 }
 
 /**
@@ -1153,27 +1183,37 @@ export async function handleOrdersDate(chatId, userId, dateStr, sendMessage) {
       return;
     }
     
-    // Determine target date
+    // Determine target date (normalized to ISO in Asia/Jakarta)
     let targetDate;
     if (dateStr === 'today' || dateStr === 'hari ini') {
       targetDate = getTodayDate();
+      console.log(`[ORDERS_TODAY] todayISO=${targetDate}`);
     } else if (dateStr === 'tomorrow' || dateStr === 'besok') {
       targetDate = getTomorrowDate();
+      console.log(`[ORDERS_TOMORROW] tomorrowISO=${targetDate}`);
     } else {
-      // Validate date format (YYYY-MM-DD)
-      const dateRegex = /^\d{4}-\d{2}-\d{2}$/;
-      if (!dateRegex.test(dateStr)) {
-        await sendMessage(chatId, '❌ Format tanggal tidak valid. Gunakan: YYYY-MM-DD\n\nContoh: /orders_date 2026-01-18\nAtau: /orders_today, /orders_tomorrow');
+      // Validate and normalize date format
+      // Accept YYYY-MM-DD, DD/MM/YYYY, or other formats (will be normalized)
+      const normalized = toISODateJakarta(dateStr);
+      if (!normalized) {
+        await sendMessage(chatId, '❌ Format tanggal tidak valid. Gunakan: YYYY-MM-DD atau DD/MM/YYYY\n\nContoh: /orders_date 2026-01-18\nAtau: /orders_today, /orders_tomorrow');
         return;
       }
-      targetDate = dateStr;
+      targetDate = normalized;
     }
     
-    console.log(`🔍 [ORDERS_DATE] Fetching orders for date: ${targetDate}`);
+    console.log(`🔍 [ORDERS_DATE] Fetching orders for date: ${targetDate} (normalized)`);
     
     // Get orders for target date (filter by FULLPAID only)
     const orders = await getOrdersByDate(targetDate, 'FULLPAID');
     console.log(`✅ [ORDERS_DATE] Found ${orders.length} FULLPAID orders for ${targetDate}`);
+    
+    // Debug logging
+    if (dateStr === 'today' || dateStr === 'hari ini') {
+      console.log(`[ORDERS_TODAY] todayISO=${targetDate} matched=${orders.length}`);
+    } else if (dateStr === 'tomorrow' || dateStr === 'besok') {
+      console.log(`[ORDERS_TOMORROW] tomorrowISO=${targetDate} matched=${orders.length}`);
+    }
     
     // Log first 3 order IDs for sanity check
     if (orders.length > 0) {

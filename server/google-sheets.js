@@ -38,6 +38,71 @@ if (!SPREADSHEET_ID) {
   console.warn('⚠️  GOOGLE_SPREADSHEET_ID not set. Google Sheets features will not work.');
 }
 
+// Header map cache to reduce READ requests (fix 429 rate limit)
+const HEADER_MAP_CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes
+const headerMapCache = new Map(); // key: sheetName, value: { headerMap, fetchedAtMs }
+const headerMapInflight = new Map(); // key: sheetName, value: Promise<headerMap> (single-flight pattern)
+
+// Admin chat IDs cache (for reminder recipients)
+const ADMIN_CHAT_IDS_CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes
+let adminChatIdsCache = null; // { chatIds: number[], fetchedAtMs: number }
+let adminChatIdsInflight = null; // Promise<number[]> (single-flight pattern)
+
+/**
+ * Invalidate header cache for a sheet (call if header mismatch detected)
+ * @param {string} sheetName - Sheet name to invalidate
+ */
+export function invalidateHeaderCache(sheetName) {
+  headerMapCache.delete(sheetName);
+  console.log(`🔄 [HEADER_CACHE] Invalidated cache for ${sheetName}`);
+}
+
+/**
+ * Retry wrapper for Google Sheets API calls with exponential backoff
+ * Handles 429 rate limit errors gracefully
+ */
+async function retryWithBackoff(fn, maxAttempts = 5) {
+  let attempt = 0;
+  const baseDelay = 500; // 500ms base delay
+  
+  while (attempt < maxAttempts) {
+    try {
+      return await fn();
+    } catch (error) {
+      attempt++;
+      
+      // Check if it's a rate limit error (429)
+      const isRateLimit = error.code === 429 || 
+                         error.message?.includes('rateLimitExceeded') ||
+                         error.message?.includes('429') ||
+                         (error.response?.status === 429);
+      
+      if (!isRateLimit || attempt >= maxAttempts) {
+        // Not a rate limit error, or max attempts reached
+        if (isRateLimit && attempt >= maxAttempts) {
+          // Transform final rate limit error to user-friendly message
+          const userError = new Error('⚠️ Sistem sedang kena limit Google Sheets (429). Coba lagi 1–2 menit ya.');
+          userError.isRateLimit = true;
+          throw userError;
+        }
+        throw error; // Re-throw non-rate-limit errors
+      }
+      
+      // Calculate backoff: 500ms, 1000ms, 2000ms, 4000ms, 8000ms
+      const delay = baseDelay * Math.pow(2, attempt - 1);
+      const jitter = Math.random() * 250; // Random jitter up to 250ms
+      const totalDelay = delay + jitter;
+      
+      // Check for Retry-After header
+      const retryAfter = error.response?.headers?.['retry-after'];
+      const finalDelay = retryAfter ? parseInt(retryAfter) * 1000 : totalDelay;
+      
+      console.warn(`⚠️ [RETRY] Rate limit (429) on attempt ${attempt}/${maxAttempts}, waiting ${Math.round(finalDelay)}ms before retry...`);
+      await new Promise(resolve => setTimeout(resolve, finalDelay));
+    }
+  }
+}
+
 /**
  * Normalize order ID for consistent comparison
  * Handles whitespace, zero-width characters, and formatting issues
@@ -112,6 +177,8 @@ const HEADER_ALIASES = {
   event_duration: ['Event Duration', 'event_duration', 'eventduration'],
   event_date: ['Event Date', 'event_date', 'eventdate'],
   delivery_time: ['Delivery Time', 'delivery_time', 'deliverytime'],
+  shipping_method: ['Shipping Method', 'shipping_method', 'shippingmethod', 'Delivery Method', 'deliverymethod'],
+  delivery_method: ['delivery_method', 'Delivery Method', 'deliverymethod', 'Shipping Method', 'shipping_method', 'shippingmethod'],
   items_json: ['Items (JSON)', 'Items JSON', 'items_json', 'itemsjson'],
   notes_json: ['Notes (JSON)', 'Notes JSON', 'notes_json', 'notesjson'],
   status: ['Status', 'status'],
@@ -182,6 +249,10 @@ function isLegacyTitleCaseColumn(columnName) {
  * Get sheet header map with alias support
  * Enforces snake_case-only for pricing/payment fields
  * Reads row 1 of the sheet and maps internal snake_case keys to column indices
+ * 
+ * CACHED: Uses in-memory cache with 10-minute TTL to reduce READ requests (fix 429)
+ * SINGLE-FLIGHT: Deduplicates concurrent requests for same sheet
+ * 
  * @param {string} sheetName - Name of the sheet
  * @param {Object} options - Options: { requireSnakeCase: boolean, sheetType: 'Orders' | 'WaitingList' | 'Reminders' }
  * @returns {Object} Map of { internal_key: columnIndex, __headersLength: number }
@@ -190,111 +261,229 @@ function isLegacyTitleCaseColumn(columnName) {
 export async function getSheetHeaderMap(sheetName, options = {}) {
   try {
     const { requireSnakeCase = true, sheetType = null } = options;
+    const cacheKey = `${sheetName}_${JSON.stringify(options)}`;
     
-    const headerResponse = await sheets.spreadsheets.values.get({
-      spreadsheetId: SPREADSHEET_ID,
-      range: `${sheetName}!1:1`,
-    });
-    
-    const headers = headerResponse.data.values?.[0] || [];
-    const headerTextMap = {}; // headerText -> index
-    const legacyColumns = []; // Track legacy Title Case columns
-    
-    // Build lookup: header text -> column index
-    headers.forEach((header, index) => {
-      if (header && typeof header === 'string') {
-        const trimmed = header.trim();
-        headerTextMap[trimmed] = index;
-        
-        // Track legacy Title Case columns
-        if (isLegacyTitleCaseColumn(trimmed)) {
-          legacyColumns.push({ name: trimmed, index, letter: columnIndexToLetter(index) });
-        }
-      }
-    });
-    
-    // Log legacy columns if found
-    if (legacyColumns.length > 0) {
-      console.warn(`⚠️ [HEADER_MAP] Legacy Title Case columns detected in ${sheetName}:`, 
-        legacyColumns.map(c => `${c.letter}: "${c.name}"`).join(', '));
-      console.warn(`⚠️ [HEADER_MAP] These columns will be IGNORED. Use snake_case columns instead.`);
+    // Check cache first
+    const cached = headerMapCache.get(cacheKey);
+    const now = Date.now();
+    if (cached && (now - cached.fetchedAtMs) < HEADER_MAP_CACHE_TTL_MS) {
+      const ageMs = now - cached.fetchedAtMs;
+      console.log(`[TRACE header_cache] Orders header source = CACHE, age_ms=${ageMs}`);
+      return cached.headerMap;
     }
     
-    // Map internal keys to column indices using aliases
-    const headerMap = {};
-    const missingKeys = [];
-    const missingSnakeCaseKeys = []; // Track missing snake_case columns specifically
+    // Single-flight: If a fetch is already in progress, await the same promise
+    if (headerMapInflight.has(cacheKey)) {
+      console.log(`[TRACE header_cache] Orders header source = INFLIGHT (dedupe)`);
+      return await headerMapInflight.get(cacheKey);
+    }
     
-    for (const [internalKey, aliases] of Object.entries(HEADER_ALIASES)) {
-      let found = false;
-      let foundColumnName = null;
-      
-      for (const alias of aliases) {
-        if (headerTextMap[alias] !== undefined) {
-          // Check if this is a legacy Title Case column for pricing/payment fields
-          if (isLegacyTitleCaseColumn(alias)) {
-            // This should never happen now since we removed Title Case from aliases,
-            // but add a safety check
-            console.error(`❌ [HEADER_MAP] Attempted to map legacy Title Case column "${alias}" for ${internalKey}`);
-            console.error(`❌ [HEADER_MAP] This is not allowed. snake_case columns must be used.`);
-            throw new Error(`Cannot use legacy Title Case column "${alias}" for ${internalKey}. Use snake_case column instead.`);
+    // Start fetch
+    const fetchPromise = (async () => {
+      try {
+        console.log(`[TRACE header_cache] Orders header source = FETCH`);
+        
+        // Read row 1 with explicit wide range to ensure all columns are included
+        // Use a wide range (A1:ZZ1) to capture all columns, even if some are empty
+        const headerResponse = await retryWithBackoff(async () => {
+          return await sheets.spreadsheets.values.get({
+            spreadsheetId: SPREADSHEET_ID,
+            range: `${sheetName}!A1:ZZ1`, // Wide range to ensure all columns are read
+          });
+        });
+        
+        const headers = headerResponse.data.values?.[0] || [];
+        
+        const headerTextMap = {}; // headerText -> index
+        const legacyColumns = []; // Track legacy Title Case columns
+        
+        // Build lookup: header text -> column index
+        // Normalize all headers (handle empty strings, null, undefined, whitespace)
+        headers.forEach((header, index) => {
+          // Normalize: convert to string, trim whitespace
+          const normalized = String(header || '').trim();
+          
+          // Only add non-empty headers to map
+          if (normalized) {
+            // If duplicate, first occurrence wins (log warning)
+            if (headerTextMap[normalized] !== undefined) {
+              console.warn(`⚠️ [HEADER_MAP] Duplicate header "${normalized}" at index ${index}, using first occurrence at ${headerTextMap[normalized]}`);
+            } else {
+              headerTextMap[normalized] = index;
+            }
+            
+            // Track legacy Title Case columns
+            if (isLegacyTitleCaseColumn(normalized)) {
+              legacyColumns.push({ name: normalized, index, letter: columnIndexToLetter(index) });
+            }
+          }
+        });
+        
+        // Diagnostic logs (only for Orders sheet to avoid spam)
+        if (sheetName === 'Orders') {
+          console.log(`[HEADER_MAP Orders] headers_count=${headers.length}`);
+          if (headers.length > 0) {
+            const lastHeaders = headers.slice(-5);
+            console.log(`[HEADER_MAP Orders] last_headers=${JSON.stringify(lastHeaders)}`);
+            
+            // Check event_date header (before headerMap is built)
+            const eventDateHeaderRaw = headers.find(h => String(h || '').trim().toLowerCase() === 'event_date');
+            const eventDateIndexRaw = headers.findIndex(h => String(h || '').trim().toLowerCase() === 'event_date');
+            console.log(`[HEADER_MAP Orders] event_date_header_raw="${eventDateHeaderRaw || 'NOT_FOUND'}"`);
+            console.log(`[HEADER_MAP Orders] event_date_index_raw=${eventDateIndexRaw !== -1 ? eventDateIndexRaw : -1}`);
+            
+            // Check if delivery_method is in the headers
+            const deliveryMethodIndex = headers.findIndex(h => String(h || '').trim().toLowerCase() === 'delivery_method');
+            console.log(`[HEADER_MAP Orders] delivery_method found at index=${deliveryMethodIndex !== -1 ? deliveryMethodIndex : -1}`);
+            
+            // Also check headerTextMap
+            console.log(`[HEADER_MAP Orders] delivery_method in map=${headerTextMap['delivery_method'] !== undefined ? 'YES' : 'NO'}`);
+            if (headerTextMap['delivery_method'] !== undefined) {
+              console.log(`[HEADER_MAP Orders] delivery_method mapped to index=${headerTextMap['delivery_method']}`);
+            }
+            
+            // Log first 10 and last 10 header names from headerTextMap
+            const allHeaderNames = Object.keys(headerTextMap);
+            const first10 = allHeaderNames.slice(0, 10);
+            const last10 = allHeaderNames.slice(-10);
+            console.log(`[HEADER_MAP Orders] first10_headers=${JSON.stringify(first10)}`);
+            console.log(`[HEADER_MAP Orders] last10_headers=${JSON.stringify(last10)}`);
+          }
+        }
+        
+        // Log legacy columns if found
+        if (legacyColumns.length > 0) {
+          console.warn(`⚠️ [HEADER_MAP] Legacy Title Case columns detected in ${sheetName}:`, 
+            legacyColumns.map(c => `${c.letter}: "${c.name}"`).join(', '));
+          console.warn(`⚠️ [HEADER_MAP] These columns will be IGNORED. Use snake_case columns instead.`);
+        }
+        
+        // Map internal keys to column indices using aliases
+        const headerMap = {};
+        const missingKeys = [];
+        const missingSnakeCaseKeys = []; // Track missing snake_case columns specifically
+        
+        for (const [internalKey, aliases] of Object.entries(HEADER_ALIASES)) {
+          let found = false;
+          let foundColumnName = null;
+          
+          for (const alias of aliases) {
+            // Normalize alias for lookup (trim whitespace, case-sensitive match)
+            const normalizedAlias = String(alias || '').trim();
+            
+            if (normalizedAlias && headerTextMap[normalizedAlias] !== undefined) {
+              // Check if this is a legacy Title Case column for pricing/payment fields
+              if (isLegacyTitleCaseColumn(normalizedAlias)) {
+                // This should never happen now since we removed Title Case from aliases,
+                // but add a safety check
+                console.error(`❌ [HEADER_MAP] Attempted to map legacy Title Case column "${alias}" for ${internalKey}`);
+                console.error(`❌ [HEADER_MAP] This is not allowed. snake_case columns must be used.`);
+                throw new Error(`Cannot use legacy Title Case column "${alias}" for ${internalKey}. Use snake_case column instead.`);
+              }
+              
+              headerMap[internalKey] = headerTextMap[normalizedAlias];
+              foundColumnName = normalizedAlias;
+              found = true;
+              break;
+            }
           }
           
-          headerMap[internalKey] = headerTextMap[alias];
-          foundColumnName = alias;
-          found = true;
-          break;
+          if (!found) {
+            missingKeys.push(internalKey);
+            
+            // Check if this is a required snake_case column
+            if (REQUIRED_SNAKE_CASE_COLUMNS.includes(internalKey)) {
+              missingSnakeCaseKeys.push(internalKey);
+            }
+          } else {
+            // Log successful mapping for pricing/payment fields
+            if (REQUIRED_SNAKE_CASE_COLUMNS.includes(internalKey)) {
+              console.log(`✅ [HEADER_MAP] Mapped ${internalKey} → column "${foundColumnName}"`);
+            }
+          }
         }
-      }
-      
-      if (!found) {
-        missingKeys.push(internalKey);
         
-        // Check if this is a required snake_case column
-        if (REQUIRED_SNAKE_CASE_COLUMNS.includes(internalKey)) {
-          missingSnakeCaseKeys.push(internalKey);
+        // Store headers length for range calculations
+        headerMap.__headersLength = headers.length;
+        
+        // Diagnostic logs (only for Orders sheet to avoid spam)
+        if (sheetName === 'Orders') {
+          console.log(`[HEADER_MAP Orders] headers_count=${headers.length}`);
+          
+          // Check event_date in headerMap (after it's built)
+          const eventDateIndex = headerMap.event_date !== undefined ? headerMap.event_date : -1;
+          const eventDateHeaderRaw = eventDateIndex >= 0 && eventDateIndex < headers.length ? headers[eventDateIndex] : '';
+          console.log(`[HEADER_MAP Orders] event_date_index=${eventDateIndex}`);
+          console.log(`[HEADER_MAP Orders] event_date_header_raw="${eventDateHeaderRaw}"`);
+          
+          if (headers.length > 0) {
+            const lastHeaders = headers.slice(-5);
+            console.log(`[HEADER_MAP Orders] last_headers=${JSON.stringify(lastHeaders)}`);
+          }
+          
+          // Check if delivery_method is found
+          const deliveryMethodIndex = headerMap.delivery_method !== undefined ? headerMap.delivery_method : -1;
+          console.log(`[HEADER_MAP Orders] delivery_method index=${deliveryMethodIndex}`);
+          
+          // Log first 10 and last 10 header names from headerTextMap
+          const allHeaderNames = Object.keys(headerTextMap);
+          const first10 = allHeaderNames.slice(0, 10);
+          const last10 = allHeaderNames.slice(-10);
+          console.log(`[HEADER_MAP Orders] first10_headers=${JSON.stringify(first10)}`);
+          console.log(`[HEADER_MAP Orders] last10_headers=${JSON.stringify(last10)}`);
         }
-      } else {
-        // Log successful mapping for pricing/payment fields
-        if (REQUIRED_SNAKE_CASE_COLUMNS.includes(internalKey)) {
-          console.log(`✅ [HEADER_MAP] Mapped ${internalKey} → column "${foundColumnName}"`);
+        
+        // Enforce snake_case requirement for pricing/payment fields
+        if (requireSnakeCase && missingSnakeCaseKeys.length > 0) {
+          const errorMsg = `Missing required snake_case columns in ${sheetName}: ${missingSnakeCaseKeys.join(', ')}. ` +
+            `These columns are mandatory and must use snake_case format (e.g., "product_total", not "Product Total"). ` +
+            `Available headers: ${Object.keys(headerTextMap).join(', ')}`;
+          console.error(`❌ [HEADER_MAP] ${errorMsg}`);
+          throw new Error(errorMsg);
         }
+        
+        if (missingKeys.length > 0 && missingSnakeCaseKeys.length === 0) {
+          // Only warn about non-critical missing keys
+          console.warn(`⚠️ [HEADER_MAP] Missing optional keys in ${sheetName}:`, missingKeys);
+          console.warn(`⚠️ [HEADER_MAP] Available headers:`, Object.keys(headerTextMap));
+        }
+        
+        // Log schema enforcement message once per sheet
+        if (requireSnakeCase && sheetType === 'Orders') {
+          console.log(`✅ [SCHEMA] Enforcing snake_case-only columns for ${sheetName}`);
+        }
+        
+        const result = {
+          ...headerMap,
+          __headersLength: headers.length,
+          __rawHeaders: headers,
+          __headerTextMap: headerTextMap,
+          __legacyColumns: legacyColumns,
+        };
+        
+        // Cache the result
+        headerMapCache.set(cacheKey, {
+          headerMap: result,
+          fetchedAtMs: now,
+        });
+        
+        return result;
+      } finally {
+        // Remove from inflight map
+        headerMapInflight.delete(cacheKey);
       }
-    }
+    })();
     
-    // Log detected headers
-    console.log(`🔍 [HEADER_MAP] Sheet: ${sheetName}, Headers detected:`, headers);
-    console.log(`🔍 [HEADER_MAP] Mapped ${Object.keys(headerMap).length} internal keys to columns`);
+    // Store promise for single-flight deduplication
+    headerMapInflight.set(cacheKey, fetchPromise);
     
-    // Enforce snake_case requirement for pricing/payment fields
-    if (requireSnakeCase && missingSnakeCaseKeys.length > 0) {
-      const errorMsg = `Missing required snake_case columns in ${sheetName}: ${missingSnakeCaseKeys.join(', ')}. ` +
-        `These columns are mandatory and must use snake_case format (e.g., "product_total", not "Product Total"). ` +
-        `Available headers: ${Object.keys(headerTextMap).join(', ')}`;
-      console.error(`❌ [HEADER_MAP] ${errorMsg}`);
-      throw new Error(errorMsg);
-    }
-    
-    if (missingKeys.length > 0 && missingSnakeCaseKeys.length === 0) {
-      // Only warn about non-critical missing keys
-      console.warn(`⚠️ [HEADER_MAP] Missing optional keys in ${sheetName}:`, missingKeys);
-      console.warn(`⚠️ [HEADER_MAP] Available headers:`, Object.keys(headerTextMap));
-    }
-    
-    // Log schema enforcement message once per sheet
-    if (requireSnakeCase && sheetType === 'Orders') {
-      console.log(`✅ [SCHEMA] Enforcing snake_case-only columns for ${sheetName}`);
-    }
-    
-    return {
-      ...headerMap,
-      __headersLength: headers.length,
-      __rawHeaders: headers,
-      __headerTextMap: headerTextMap,
-      __legacyColumns: legacyColumns,
-    };
+    return await fetchPromise;
   } catch (error) {
     console.error(`❌ [HEADER_MAP] Error reading headers from ${sheetName}:`, error.message);
+    if (error.isRateLimit) {
+      // User-friendly rate limit error
+      throw error;
+    }
     throw error;
   }
 }
@@ -776,10 +965,12 @@ export async function generateOrderId() {
  */
 export async function ensureOrdersPaymentHeaders() {
   try {
-    // Get current headers
-    const response = await sheets.spreadsheets.values.get({
-      spreadsheetId: SPREADSHEET_ID,
-      range: 'Orders!A1:Z1',
+    // Get current headers (with retry for 429)
+    const response = await retryWithBackoff(async () => {
+      return await sheets.spreadsheets.values.get({
+        spreadsheetId: SPREADSHEET_ID,
+        range: 'Orders!A1:Z1',
+      });
     });
 
     const headers = response.data.values?.[0] || [];
@@ -799,6 +990,11 @@ export async function ensureOrdersPaymentHeaders() {
       'payment_status',
       'remaining_balance',
     ];
+    
+    // Also ensure delivery_method column exists (shipping method)
+    if (!headerMap['delivery_method']) {
+      paymentHeaders.push('delivery_method');
+    }
 
     const missingHeaders = paymentHeaders.filter(h => !headerMap[h]);
     
@@ -808,16 +1004,21 @@ export async function ensureOrdersPaymentHeaders() {
       const startCol = columnIndexToLetter(lastColIndex);
       
       // Add missing headers (snake_case only)
-      await sheets.spreadsheets.values.update({
-        spreadsheetId: SPREADSHEET_ID,
-        range: `Orders!${startCol}1`,
-        valueInputOption: 'RAW',
-        requestBody: {
-          values: [missingHeaders],
-        },
+      await retryWithBackoff(async () => {
+        return await sheets.spreadsheets.values.update({
+          spreadsheetId: SPREADSHEET_ID,
+          range: `Orders!${startCol}1`,
+          valueInputOption: 'RAW',
+          requestBody: {
+            values: [missingHeaders],
+          },
+        });
       });
       
       console.log(`✅ Added payment headers (snake_case) to Orders sheet: ${missingHeaders.join(', ')}`);
+      
+      // Invalidate header cache after adding columns
+      invalidateHeaderCache('Orders');
     }
   } catch (error) {
     console.error('⚠️ Error ensuring payment headers (non-critical):', error.message);
@@ -961,13 +1162,12 @@ async function computeOrderTotals(orderData, priceList) {
     }
   }
   
-  // Delivery fee (from orderData.delivery_fee, default 0)
-  // Log for debugging
-  console.log(`🔍 [ORDER_SAVE] delivery_fee from orderData: ${orderData.delivery_fee} (type: ${typeof orderData.delivery_fee})`);
-  const deliveryFee = orderData.delivery_fee !== null && orderData.delivery_fee !== undefined 
-    ? (typeof orderData.delivery_fee === 'number' ? orderData.delivery_fee : parseFloat(orderData.delivery_fee) || 0)
-    : 0;
-  console.log(`🔍 [ORDER_SAVE] writing delivery_fee: ${deliveryFee}`);
+    // Delivery fee (from orderData.delivery_fee, default 0)
+    // Use the parsed delivery_fee directly from orderData
+    const deliveryFee = orderData.delivery_fee !== null && orderData.delivery_fee !== undefined 
+      ? (typeof orderData.delivery_fee === 'number' ? orderData.delivery_fee : parseFloat(orderData.delivery_fee) || 0)
+      : 0;
+    console.log(`[TRACE delivery_fee] payload.delivery_fee=${deliveryFee}`);
   
   // Total amount (canonical - replaces final_total)
   const totalAmount = productTotal + packagingFee + deliveryFee;
@@ -1061,8 +1261,10 @@ export async function saveOrder(orderData, options = {}) {
     }
     
     // Check if Orders sheet exists, create if not
-    const spreadsheet = await sheets.spreadsheets.get({
-      spreadsheetId: SPREADSHEET_ID,
+    const spreadsheet = await retryWithBackoff(async () => {
+      return await sheets.spreadsheets.get({
+        spreadsheetId: SPREADSHEET_ID,
+      });
     });
     const existingSheets = spreadsheet.data.sheets.map(s => s.properties.title);
 
@@ -1084,7 +1286,7 @@ export async function saveOrder(orderData, options = {}) {
       // Add headers (original + payment columns)
       await sheets.spreadsheets.values.update({
         spreadsheetId: SPREADSHEET_ID,
-        range: 'Orders!A1:W1',
+        range: 'Orders!A1:X1',
         valueInputOption: 'RAW',
         requestBody: {
           values: [[
@@ -1096,6 +1298,7 @@ export async function saveOrder(orderData, options = {}) {
             'Event Duration',
             'Event Date',
             'Delivery Time',
+            'delivery_method',
             'Items (JSON)',
             'Notes (JSON)',
             'Status',
@@ -1134,6 +1337,39 @@ export async function saveOrder(orderData, options = {}) {
       throw new Error(errorMsg);
     }
     console.log(`✅ [SAVE_ORDER] delivery_fee column found at index ${headerMap.delivery_fee}`);
+    
+    // Validate delivery_method column exists (with cache invalidation retry)
+    if (headerMap.delivery_method === undefined) {
+      console.warn(`⚠️ [SAVE_ORDER] delivery_method column not found in header map. Invalidating cache and retrying...`);
+      
+      // Invalidate cache and retry ONCE
+      invalidateHeaderCache('Orders');
+      
+      // Re-fetch header map (bypass cache)
+      const retryHeaderMap = await getSheetHeaderMap('Orders', { requireSnakeCase: true, sheetType: 'Orders' });
+      
+      if (retryHeaderMap.delivery_method === undefined) {
+        // Still missing after retry - log diagnostic info
+        console.error(`❌ [SAVE_ORDER] delivery_method column still not found after cache invalidation`);
+        console.error(`❌ [SAVE_ORDER] Header map keys: ${Object.keys(retryHeaderMap).filter(k => !k.startsWith('__')).join(', ')}`);
+        console.error(`❌ [SAVE_ORDER] Headers length: ${retryHeaderMap.__headersLength || 'unknown'}`);
+        
+        const errorMsg = `CRITICAL: Orders sheet is missing required column "delivery_method". Cannot save order. Please add "delivery_method" column to Orders sheet.`;
+        throw new Error(errorMsg);
+      }
+      
+      // Found after retry - use the retry header map
+      console.log(`✅ [SAVE_ORDER] delivery_method column found at index ${retryHeaderMap.delivery_method} (after cache invalidation)`);
+      // Update headerMap for rest of function
+      Object.assign(headerMap, retryHeaderMap);
+    } else {
+      console.log(`✅ [SAVE_ORDER] delivery_method column found at index ${headerMap.delivery_method}`);
+    }
+    
+    // Diagnostic log
+    console.log(`[HEADER_MAP] delivery_method index=${headerMap.delivery_method !== undefined ? headerMap.delivery_method : -1}`);
+    
+    console.log(`[TRACE save] delivery_method="${orderData.delivery_method || orderData.shipping_method || '-'}"`);
 
     // Get price list for calculations
     const priceList = await getPriceList();
@@ -1155,6 +1391,7 @@ export async function saveOrder(orderData, options = {}) {
       event_duration: orderData.event_duration || '',
       event_date: orderData.event_date || '',
       delivery_time: orderData.delivery_time || '', // Already normalized above
+      delivery_method: orderData.delivery_method || orderData.shipping_method || '-', // Metode pengiriman (stored in Orders.delivery_method)
       items_json: itemsJson,
       notes_json: notesJson,
       status: orderData.status || 'pending',
@@ -1165,7 +1402,7 @@ export async function saveOrder(orderData, options = {}) {
       // Payment columns (calculated values)
       product_total: totals.productTotal,
       packaging_fee: totals.packagingFee,
-      delivery_fee: totals.deliveryFee, // Use parsed delivery_fee from orderData
+      delivery_fee: totals.deliveryFee, // Use parsed delivery_fee from orderData (computed in computeOrderTotals)
       total_amount: totals.totalAmount, // Canonical field (WRITE)
       final_total: totals.finalTotal, // Deprecated, kept for backward compatibility
       dp_min_amount: totals.dpMinAmount,
@@ -1216,15 +1453,17 @@ export async function saveOrder(orderData, options = {}) {
       const lastCol = columnIndexToLetter(headerMap.__headersLength - 1);
       const range = `Orders!A:${lastCol}`;
 
-      await sheets.spreadsheets.values.append({
-        spreadsheetId: SPREADSHEET_ID,
-        range: range,
-        valueInputOption: 'RAW',
-        requestBody: {
-          values: [row],
-        },
+      await retryWithBackoff(async () => {
+        return await sheets.spreadsheets.values.append({
+          spreadsheetId: SPREADSHEET_ID,
+          range: range,
+          valueInputOption: 'RAW',
+          requestBody: {
+            values: [row],
+          },
+        });
       });
-        console.log(`✅ [SAVE_ORDER] saved invoice ${orderId} with delivery_fee=${totals.deliveryFee}`);
+      console.log(`✅ [SAVE_ORDER] saved invoice ${orderId} with delivery_fee=${totals.deliveryFee}`);
     }
 
     // Post-write validation: Check for duplicates (safety net)
@@ -2262,16 +2501,43 @@ export async function getAllOrders(limit = 100) {
     // Get header map using alias-based mapping (enforce snake_case for Orders)
     const headerMap = await getSheetHeaderMap('Orders', { requireSnakeCase: true, sheetType: 'Orders' });
     
+    // Log header map info for event_date
+    const eventDateIndex = headerMap.event_date;
+    console.log(`[HEADER_MAP Orders] headers_count=${headerMap.__headersLength}`);
+    console.log(`[HEADER_MAP Orders] event_date_index=${eventDateIndex !== undefined ? eventDateIndex : -1}`);
+    
+    // Log first and last headers for verification
+    if (headerMap.__headersLength > 0) {
+      const firstHeaders = Object.keys(headerMap).filter(k => !k.startsWith('__')).slice(0, 10);
+      const lastHeaders = Object.keys(headerMap).filter(k => !k.startsWith('__')).slice(-10);
+      console.log(`[HEADER_MAP Orders] first10_headers=${JSON.stringify(firstHeaders)}`);
+      console.log(`[HEADER_MAP Orders] last10_headers=${JSON.stringify(lastHeaders)}`);
+    }
+    
+    const range = `Orders!A:${columnIndexToLetter(headerMap.__headersLength - 1)}`;
+    console.log(`[ORDERS_CMD] spreadsheetId=${SPREADSHEET_ID} range=${range} sheet=Orders`);
+    
     // Read extended range to include all columns
-    const response = await sheets.spreadsheets.values.get({
-      spreadsheetId: SPREADSHEET_ID,
-      range: `Orders!A:${columnIndexToLetter(headerMap.__headersLength - 1)}`,
+    const response = await retryWithBackoff(async () => {
+      return await sheets.spreadsheets.values.get({
+        spreadsheetId: SPREADSHEET_ID,
+        range: range,
+      });
     });
 
     const rows = response.data.values || [];
     if (rows.length <= 1) {
       console.log(`⚠️ [GET_ALL_ORDERS] No data rows found (only headers)`);
       return [];
+    }
+    
+    // Log first 5 rows' event_date values for debugging
+    if (eventDateIndex !== undefined && rows.length > 1) {
+      for (let i = 1; i < Math.min(6, rows.length); i++) {
+        const row = rows[i];
+        const eventDateRaw = row[eventDateIndex] || '';
+        console.log(`[ORDERS_ROW] row${i-1}_event_date_raw="${eventDateRaw}"`);
+      }
     }
 
     const orders = rows.slice(1, limit + 1).map(row => {
@@ -2369,6 +2635,10 @@ export async function getAllOrders(limit = 100) {
           }
           return parseFloat(val) || 0;
         })(),
+        // Shipping method: read from delivery_method column (canonical), fallback for backward compatibility
+        delivery_method: getValue('delivery_method', '') || getValue('shipping_method', '') || '-',
+        // Keep backward compatibility field
+        shipping_method: getValue('delivery_method', '') || getValue('shipping_method', '') || '-',
         payment_status: getValue('payment_status', 'UNPAID'),
         remaining_balance: (() => {
           const val = getValue('remaining_balance', '0');
@@ -3312,6 +3582,128 @@ export async function upsertUserRole(platform, userId, displayName, role, isActi
     console.error('❌ Error upserting user role:', error.message);
     throw error;
   }
+}
+
+/**
+ * Get admin Telegram chat IDs from Users sheet
+ * Uses caching (10-minute TTL) and single-flight pattern to minimize READ requests
+ * Filters: platform == "telegram", role == "admin", is_active == true
+ * Returns array of chat_ids (parseInt(user_id))
+ * 
+ * @returns {Promise<number[]>} Array of Telegram chat IDs (numbers)
+ */
+export async function getAdminChatIds() {
+  try {
+    // Check cache first
+    const now = Date.now();
+    if (adminChatIdsCache && (now - adminChatIdsCache.fetchedAtMs) < ADMIN_CHAT_IDS_CACHE_TTL_MS) {
+      console.log(`[ADMIN_RECIPIENTS] Using cached admin chat IDs (age: ${Math.round((now - adminChatIdsCache.fetchedAtMs) / 1000)}s)`);
+      return adminChatIdsCache.chatIds;
+    }
+    
+    // Single-flight: if a fetch is in progress, await the same promise
+    if (adminChatIdsInflight) {
+      console.log(`[ADMIN_RECIPIENTS] Fetch already in progress, awaiting...`);
+      return await adminChatIdsInflight;
+    }
+    
+    // Start fetch
+    const fetchPromise = (async () => {
+      try {
+        await ensureUsersSheet();
+        
+        // Read Users sheet ONCE
+        const response = await retryWithBackoff(async () => {
+          return await sheets.spreadsheets.values.get({
+            spreadsheetId: SPREADSHEET_ID,
+            range: `${USERS_SHEET}!A:Z`,
+          });
+        });
+        
+        const rows = response.data.values || [];
+        if (rows.length <= 1) {
+          // Only headers, no users
+          const result = [];
+          adminChatIdsCache = { chatIds: result, fetchedAtMs: Date.now() };
+          console.log(`[ADMIN_RECIPIENTS] count=0 (no users in sheet)`);
+          return result;
+        }
+        
+        // Map headers to column indices
+        const headerRow = rows[0] || [];
+        const headerMap = {};
+        headerRow.forEach((header, index) => {
+          const headerLower = String(header).toLowerCase().trim();
+          headerMap[headerLower] = index;
+        });
+        
+        const userIdCol = headerMap['user_id'] ?? 0;
+        const platformCol = headerMap['platform'] ?? 1;
+        const roleCol = headerMap['role'] ?? 3;
+        const isActiveCol = headerMap['is_active'] ?? 4;
+        
+        // Filter admin users
+        const chatIds = [];
+        for (let i = 1; i < rows.length; i++) {
+          const row = rows[i];
+          if (!row || row.length === 0) continue;
+          
+          const userId = row[userIdCol];
+          const platform = String(row[platformCol] || '').toLowerCase().trim();
+          const role = String(row[roleCol] || '').toLowerCase().trim();
+          const isActiveValue = row[isActiveCol];
+          const isActive = isActiveValue === 'TRUE' || 
+                          isActiveValue === true || 
+                          isActiveValue === 'true' ||
+                          isActiveValue === '' ||
+                          isActiveValue === undefined ||
+                          isActiveValue === null; // Default to true if empty/missing
+          
+          // Filter: platform == "telegram", role == "admin", is_active == true
+          if (platform === 'telegram' && role === 'admin' && isActive) {
+            // Validate user_id is numeric
+            const userIdStr = String(userId || '').trim();
+            if (!userIdStr) continue; // Skip empty user_id
+            
+            const chatId = parseInt(userIdStr);
+            if (isNaN(chatId)) {
+              console.warn(`⚠️ [ADMIN_RECIPIENTS] Invalid user_id (non-numeric): "${userIdStr}" in row ${i + 1}, skipping`);
+              continue;
+            }
+            
+            chatIds.push(chatId);
+          }
+        }
+        
+        // Cache result
+        adminChatIdsCache = { chatIds, fetchedAtMs: Date.now() };
+        console.log(`[ADMIN_RECIPIENTS] count=${chatIds.length}`);
+        
+        return chatIds;
+      } finally {
+        // Clear inflight promise
+        adminChatIdsInflight = null;
+      }
+    })();
+    
+    // Store inflight promise
+    adminChatIdsInflight = fetchPromise;
+    
+    return await fetchPromise;
+  } catch (error) {
+    console.error('❌ [ADMIN_RECIPIENTS] Error getting admin chat IDs:', error.message);
+    adminChatIdsInflight = null; // Clear on error
+    // Return empty array on error (fail gracefully)
+    return [];
+  }
+}
+
+/**
+ * Invalidate admin chat IDs cache (call if Users sheet is updated)
+ */
+export function invalidateAdminChatIdsCache() {
+  adminChatIdsCache = null;
+  console.log(`[ADMIN_RECIPIENTS] Cache invalidated`);
 }
 
 /**

@@ -71,7 +71,7 @@ import {
 } from './admin-bot-commands.js';
 import {
   checkAndSendRemindersForToday,
-  createOrderReminders,
+  runDailyRemindersJob,
   ensureRemindersSheet,
 } from './reminder-system.js';
 import {
@@ -185,6 +185,87 @@ function stripBotMentions(text, botUsername) {
 
 // Track processed order confirmations to prevent duplicates
 const processedConfirmations = new Set();
+// Track invoices sent to prevent double-sending (10 second TTL)
+const sentInvoices = new Map(); // key: orderId, value: { sentAt: timestamp }
+// Track processed command messages to prevent duplicate replies
+const processedCommands = new Set(); // key: update_id or `${chatId}:${messageId}`
+
+// Chat-scoped order state (prevents state bleeding between chats)
+// key: chatId (string), value: { mode, startedAt, lastCommand, ... }
+const orderStateByChat = new Map();
+const ORDER_STATE_TTL_MS = 30 * 60 * 1000; // 30 minutes
+
+/**
+ * Get chat-scoped state key
+ * For groups, include user_id to support per-user state within group
+ * For private chats, chat_id is sufficient
+ */
+function getChatStateKey(chatId, userId, chatType) {
+  if (chatType === 'group' || chatType === 'supergroup') {
+    // In groups, state is per-user to avoid conflicts
+    return `${chatId}:${userId}`;
+  }
+  // Private chat: chat_id is unique per user
+  return String(chatId);
+}
+
+/**
+ * Get order state for a chat
+ */
+function getOrderState(chatId, userId, chatType) {
+  const key = getChatStateKey(chatId, userId, chatType);
+  const state = orderStateByChat.get(key);
+  
+  // Check TTL
+  if (state && (Date.now() - state.startedAt) > ORDER_STATE_TTL_MS) {
+    orderStateByChat.delete(key);
+    return null;
+  }
+  
+  return state;
+}
+
+/**
+ * Set order state for a chat
+ */
+function setOrderState(chatId, userId, chatType, mode) {
+  const key = getChatStateKey(chatId, userId, chatType);
+  orderStateByChat.set(key, {
+    mode,
+    startedAt: Date.now(),
+    chatId,
+    userId,
+    chatType,
+  });
+  console.log(`[STATE] chat_id=${chatId} from=${userId} is_group=${chatType === 'group' || chatType === 'supergroup'} mode_after=${mode}`);
+}
+
+/**
+ * Clear order state for a chat
+ */
+function clearOrderState(chatId, userId, chatType) {
+  const key = getChatStateKey(chatId, userId, chatType);
+  const state = orderStateByChat.get(key);
+  if (state) {
+    orderStateByChat.delete(key);
+    console.log(`[STATE] chat_id=${chatId} from=${userId} mode_before=${state.mode} mode_after=cleared`);
+  }
+}
+
+// Clean up old states periodically
+setInterval(() => {
+  const now = Date.now();
+  let cleaned = 0;
+  for (const [key, state] of orderStateByChat.entries()) {
+    if (now - state.startedAt > ORDER_STATE_TTL_MS) {
+      orderStateByChat.delete(key);
+      cleaned++;
+    }
+  }
+  if (cleaned > 0) {
+    console.log(`🧹 [STATE] Cleaned up ${cleaned} expired order states`);
+  }
+}, 5 * 60 * 1000); // Every 5 minutes
 
 /**
  * Step 1: Receive Messages from Telegram Bot
@@ -450,26 +531,37 @@ async function handleTelegramMessage(message) {
     // In groups, orders must come via /pesan command (privacy mode)
     let orderProcessed = false;
     if (chatType === 'private') {
-      try {
-        // Detect format and parse
-        const detectedFormat = detectOrderFormat(message.text);
-        console.log(`🔍 [ORDER_PARSE] Private chat auto-parse - format: ${detectedFormat || 'none'}`);
-        
-        let parsedOrder;
-        try {
-          parsedOrder = parseOrderFromMessageAuto(message.text);
-        } catch (parseError) {
-          // Handle parsing errors (e.g., invalid delivery_fee)
-          if (parseError.field === 'delivery_fee') {
-            const errorMessage = `❌ ${parseError.message}`;
-            await sendTelegramMessage(message.chat.id, errorMessage);
-            orderProcessed = true;
-            return;
-          }
-          throw parseError; // Re-throw other errors
-        }
+      // Check if we're awaiting a form (from previous /pesan command)
+      const state = getOrderState(chatId, userId, chatType);
+      const shouldParse = state?.mode === 'AWAITING_FORM' || detectOrderFormat(message.text);
       
-      console.log(`🔍 [ORDER_PARSE] Parsed fields:`, {
+      if (shouldParse) {
+        try {
+          // Detect format and parse
+          const detectedFormat = detectOrderFormat(message.text);
+          console.log(`🔍 [ORDER_PARSE] Private chat auto-parse - format: ${detectedFormat || 'none'}, state: ${state?.mode || 'none'}`);
+          
+          let parsedOrder;
+          try {
+            parsedOrder = parseOrderFromMessageAuto(message.text);
+            console.log(`[PARSE] chat_id=${chatId} delivery_method="${parsedOrder.delivery_method || 'null'}"`);
+            
+            // Clear state if order was successfully parsed
+            if (parsedOrder.customer_name || parsedOrder.items.length > 0) {
+              clearOrderState(chatId, userId, chatType);
+            }
+          } catch (parseError) {
+            // Handle parsing errors (e.g., invalid delivery_fee)
+            if (parseError.field === 'delivery_fee') {
+              const errorMessage = `❌ ${parseError.message}`;
+              await sendTelegramMessage(message.chat.id, errorMessage);
+              orderProcessed = true;
+              return;
+            }
+            throw parseError; // Re-throw other errors
+          }
+      
+          console.log(`🔍 [ORDER_PARSE] Parsed fields:`, {
         customer_name: parsedOrder.customer_name ? '✓' : '✗',
         phone_number: parsedOrder.phone_number ? '✓' : '✗',
         address: parsedOrder.address ? '✓' : '✗',
@@ -520,9 +612,14 @@ async function handleTelegramMessage(message) {
           items: parsedOrder.items,
           notes: parsedOrder.notes,
           delivery_fee: parsedOrder.delivery_fee !== null && parsedOrder.delivery_fee !== undefined ? parsedOrder.delivery_fee : null, // Biaya Pengiriman (Ongkir)
+          delivery_method: parsedOrder.delivery_method || null, // Metode pengiriman (stored in Orders.delivery_method)
           status: 'pending',
           created_at: new Date().toISOString(),
         };
+        
+        console.log(`[TRACE delivery_fee] before_save.delivery_fee=${orderData.delivery_fee}`);
+        console.log(`[TRACE save] delivery_method="${orderData.delivery_method}"`);
+        console.log(`[PARSE] chat_id=${chatId} delivery_method="${parsedOrder.delivery_method || 'null'}"`);
 
         // Check if order date is in the future
         const isFuture = isFutureDate(orderData.event_date);
@@ -585,46 +682,11 @@ async function handleTelegramMessage(message) {
           
           // Create reminders for future orders (H-4, H-3, H-1)
           // Reminder creation is based ONLY on Event Date (not payment status, order status, etc.)
+          // NOTE: Reminders are NO LONGER created at order creation time.
+          // They are handled by the daily job (runDailyRemindersJob) which reads Orders once per day.
+          // This reduces Google Sheets READ requests and avoids 429 rate limits.
           if (orderData.event_date) {
-            console.log(`🔍 [ORDER_CREATE] Checking reminder creation - Order ID: ${orderData.id}, Event Date: ${orderData.event_date}`);
-            
-            // Normalize today for comparison
-            const today = new Date();
-            today.setHours(0, 0, 0, 0);
-            
-            // Parse event date
-            const { parseDate } = await import('./date-utils.js');
-            const eventDateParsed = parseDate(orderData.event_date);
-            
-            if (eventDateParsed) {
-              // Normalize event date to start of day
-              eventDateParsed.setHours(0, 0, 0, 0);
-              
-              console.log(`🔍 [ORDER_CREATE] Event date parsed: ${eventDateParsed.toISOString().split('T')[0]}, Today: ${today.toISOString().split('T')[0]}`);
-              
-              // STRICT comparison: eventDate > today (not >=)
-              if (eventDateParsed > today) {
-                console.log(`✅ [ORDER_CREATE] Event date is in the future, creating reminders...`);
-                try {
-                  const reminders = await createOrderReminders(orderData.id, orderData.event_date, orderData);
-                  if (reminders.length > 0) {
-                    console.log(`✅ [ORDER_CREATE] Successfully created ${reminders.length} reminder(s) for order ${orderData.id}`);
-                  } else {
-                    console.log(`⚠️ [ORDER_CREATE] No reminders created for order ${orderData.id} (check logs above for reason)`);
-                  }
-                } catch (error) {
-                  console.error('❌ [ORDER_CREATE] Error creating reminders (non-critical):', error);
-                  console.error('❌ [ORDER_CREATE] Stack:', error.stack);
-                  // Don't fail order creation if reminder creation fails
-                }
-              } else {
-                console.log(`⚠️ [ORDER_CREATE] Event date is not in the future (${eventDateParsed.toISOString().split('T')[0]} <= ${today.toISOString().split('T')[0]}), skipping reminder creation`);
-              }
-            } else {
-              console.log(`⚠️ [ORDER_CREATE] Failed to parse event date: ${orderData.event_date}, skipping reminder creation`);
-            }
-          } else {
-            console.log(`⚠️ [ORDER_CREATE] No event date provided for order ${orderData.id}, skipping reminder creation`);
+            console.log(`ℹ️ [ORDER_CREATE] Reminder will be processed by daily job (event_date: ${orderData.event_date})`);
           }
 
           // Get price list and calculate order summary
@@ -691,8 +753,8 @@ async function handleTelegramMessage(message) {
           return; // CRITICAL: Return immediately to prevent fall-through
         }
       }
-      } catch (error) {
-        // Check if this is a parse error (not an order) or a save error (order was parsed but save failed)
+        } catch (error) {
+          // Check if this is a parse error (not an order) or a save error (order was parsed but save failed)
         if (error.message && (
           error.message.includes('Unable to parse range') ||
           error.message.includes('Error saving') ||
@@ -718,6 +780,7 @@ async function handleTelegramMessage(message) {
           } else {
             console.log('✅ [ORDER_PARSE] Order was processed despite error, orderProcessed=true');
           }
+        }
         }
       }
     } else {
@@ -1069,59 +1132,11 @@ async function finalizeOrder(orderId) {
     await saveOrder(order, { skipDuplicateCheck: true }); // skipDuplicateCheck because we have lock + upsert handles it
     console.log(`✅ [FINALIZE_ORDER] Order upserted to Orders sheet (update if exists, append if not)`);
 
-    // Create reminders if Event Date is in the future
+    // NOTE: Reminders are NO LONGER created at order finalization time.
+    // They are handled by the daily job (runDailyRemindersJob) which reads Orders once per day.
+    // This reduces Google Sheets READ requests and avoids 429 rate limits.
     if (order.event_date) {
-      console.log(`🔍 [FINALIZE_ORDER] Checking reminder creation - Order ID: ${orderId}, Event Date: ${order.event_date}`);
-      
-      // Normalize today for comparison
-      const today = new Date();
-      today.setHours(0, 0, 0, 0);
-      
-      // Parse event date (should already be in YYYY-MM-DD format, but handle legacy formats defensively)
-      let eventDateParsed = null;
-      try {
-        // If already in YYYY-MM-DD format, parse directly
-        if (/^\d{4}-\d{2}-\d{2}$/.test(order.event_date)) {
-          eventDateParsed = new Date(order.event_date + 'T00:00:00');
-        } else {
-          // Legacy format - normalize first
-          const normalized = normalizeEventDate(order.event_date);
-          eventDateParsed = new Date(normalized + 'T00:00:00');
-        }
-        
-        if (isNaN(eventDateParsed.getTime())) {
-          throw new Error('Invalid date after parsing');
-        }
-        
-        // Normalize event date to start of day
-        eventDateParsed.setHours(0, 0, 0, 0);
-        
-        console.log(`🔍 [FINALIZE_ORDER] Event date parsed: ${eventDateParsed.toISOString().split('T')[0]}, Today: ${today.toISOString().split('T')[0]}`);
-        
-        // STRICT comparison: eventDate > today (not >=)
-        if (eventDateParsed > today) {
-          console.log(`✅ [FINALIZE_ORDER] Event date is in the future, creating reminders...`);
-          try {
-            const reminders = await createOrderReminders(orderId, order.event_date, order);
-            if (reminders.length > 0) {
-              console.log(`✅ [FINALIZE_ORDER] Successfully created ${reminders.length} reminder(s) for order ${orderId}`);
-            } else {
-              console.log(`⚠️ [FINALIZE_ORDER] No reminders created for order ${orderId} (check logs above for reason)`);
-            }
-          } catch (error) {
-            console.error('❌ [FINALIZE_ORDER] Error creating reminders (non-critical):', error);
-            console.error('❌ [FINALIZE_ORDER] Stack:', error.stack);
-            // Don't fail finalization if reminder creation fails
-          }
-        } else {
-          console.log(`⚠️ [FINALIZE_ORDER] Event date is not in the future (${eventDateParsed.toISOString().split('T')[0]} <= ${today.toISOString().split('T')[0]}), skipping reminder creation`);
-        }
-      } catch (error) {
-        console.error(`❌ [FINALIZE_ORDER] Failed to parse event date "${order.event_date}":`, error.message);
-        // Don't fail finalization, but skip reminder creation
-      }
-    } else {
-      console.log(`⚠️ [FINALIZE_ORDER] No event date provided for order ${orderId}, skipping reminder creation`);
+      console.log(`ℹ️ [FINALIZE_ORDER] Reminder will be processed by daily job (event_date: ${order.event_date})`);
     }
 
     // Update order status in memory
@@ -1160,6 +1175,13 @@ async function handleOrderConfirmation(chatId, orderId, messageId) {
     const firstKey = processedConfirmations.values().next().value;
     processedConfirmations.delete(firstKey);
   }
+  
+  // Additional guard: Check if invoice was already sent for this order (within last 10 seconds)
+  const invoiceSent = sentInvoices.get(orderId);
+  if (invoiceSent && (Date.now() - invoiceSent.sentAt) < 10000) {
+    console.log(`⚠️ [ORDER_CONFIRM] Invoice already sent for order ${orderId} (within last 10s), skipping duplicate send`);
+    return;
+  }
 
   try {
     // Finalize order (centralized function handles all writes, locking, and checks)
@@ -1186,24 +1208,25 @@ async function handleOrderConfirmation(chatId, orderId, messageId) {
       return;
     }
 
-    // Send invoice (ONLY ONCE)
-    console.log('📄 [ORDER_CONFIRM] Sending invoice for order:', orderId);
+    // Send invoice (ONLY ONCE) - This is the ONLY message sent on confirmation
+    console.log(`[CONFIRM] invoice=${orderId} sending=RECAP_ONLY`);
+    console.log('📄 [ORDER_CONFIRM] Sending invoice (recap) for order:', orderId);
     await sendTelegramMessage(chatId, invoice);
-
-    // Send payment notification based on delivery date
-    // - If delivery date > 3 days: 50% down payment
-    // - If delivery date <= 3 days: full payment
-    // Use total_amount (canonical) with fallback to final_total (legacy) or calculated subtotal
-    const totalForNotification = order.total_amount || order.final_total || calculation.subtotal || 0;
-    const paymentNotification = formatPaymentNotification(order, totalForNotification);
     
-    // Guard: Only send if payment notification is valid
-    if (paymentNotification && typeof paymentNotification === 'string' && paymentNotification.trim().length > 0) {
-      console.log('💰 [ORDER_CONFIRM] Sending payment notification for order:', orderId);
-      await sendTelegramMessage(chatId, paymentNotification);
-    } else {
-      console.warn('⚠️ [ORDER_CONFIRM] Payment notification returned invalid value, skipping:', paymentNotification);
+    // Mark invoice as sent (with TTL for cleanup)
+    sentInvoices.set(orderId, { sentAt: Date.now() });
+    
+    // Clean up old invoice tracking entries (older than 60 seconds)
+    const now = Date.now();
+    for (const [oid, data] of sentInvoices.entries()) {
+      if (now - data.sentAt > 60000) {
+        sentInvoices.delete(oid);
+      }
     }
+
+    // NOTE: Payment notification (💰 PEMBAYARAN PENUH) is NOT sent during confirmation.
+    // Payment reminders are handled separately by the reminder system (H-4, H-3, H-1).
+    // The recap message already contains payment instructions, so no separate payment message is needed.
     
     console.log(`✅ [ORDER_CONFIRM] Order ${orderId} confirmation completed successfully`);
     console.log(`✅ [ORDER_CONFIRM] Returning early to prevent any other processing`);
@@ -1424,6 +1447,22 @@ async function handleTelegramCommand(message) {
   const userId = message.from?.id;
   const chatType = message.chat?.type || 'unknown';
   const messageText = message.text || '';
+  const messageId = message.message_id;
+  
+  // Deduplication: prevent duplicate command processing
+  // Use update_id if available (from webhook context), otherwise use chatId:messageId
+  const dedupeKey = message.update_id ? `update_${message.update_id}` : `${chatId}:${messageId}`;
+  if (processedCommands.has(dedupeKey)) {
+    console.log(`[DEDUP] skip key=${dedupeKey} command="${messageText.substring(0, 20)}"`);
+    return; // Already processed, skip
+  }
+  processedCommands.add(dedupeKey);
+  
+  // Clean up old entries (keep only last 1000)
+  if (processedCommands.size > 1000) {
+    const firstKey = processedCommands.values().next().value;
+    processedCommands.delete(firstKey);
+  }
   
   // Parse command with payload extraction
   const { command: rawCommand, args, payload } = parseCommand(messageText);
@@ -1451,9 +1490,16 @@ async function handleTelegramCommand(message) {
       );
       break;
     case '/pesan':
+      // Set state to AWAITING_FORM for this chat (if no payload)
+      const currentState = getOrderState(chatId, userId, chatType);
+      console.log(`[STATE] chat_id=${chatId} from=${userId} is_group=${chatType === 'group' || chatType === 'supergroup'} mode_before=${currentState?.mode || 'none'}`);
+      
       // Check if payload exists (order form in same message)
       if (payload && payload.trim().length > 0) {
         console.log(`🔍 [PESAN] Payload detected (${payload.length} chars), parsing order...`);
+        
+        // Clear any existing state (order is being processed)
+        clearOrderState(chatId, userId, chatType);
         
         // Parse order from payload
         const detectedFormat = detectOrderFormat(payload);
@@ -1462,9 +1508,10 @@ async function handleTelegramCommand(message) {
         let parsedOrder;
         try {
           parsedOrder = parseOrderFromMessageAuto(payload);
+          console.log(`[PARSE] chat_id=${chatId} delivery_method="${parsedOrder.delivery_method || 'null'}"`);
         } catch (parseError) {
-          // Handle parsing errors (e.g., invalid shipping_fee)
-          if (parseError.field === 'shipping_fee') {
+          // Handle parsing errors (e.g., invalid delivery_fee)
+          if (parseError.field === 'delivery_fee' || parseError.field === 'shipping_fee') {
             const errorMessage = `❌ ${parseError.message}`;
             const replyToId = chatType !== 'private' ? message.message_id : null;
             await sendTelegramMessage(chatId, errorMessage, null, replyToId);
@@ -1508,9 +1555,12 @@ async function handleTelegramCommand(message) {
             items: parsedOrder.items,
             notes: parsedOrder.notes,
             delivery_fee: parsedOrder.delivery_fee !== null && parsedOrder.delivery_fee !== undefined ? parsedOrder.delivery_fee : null, // Biaya Pengiriman (Ongkir)
+            delivery_method: parsedOrder.delivery_method || null, // Metode pengiriman (stored in Orders.delivery_method)
             status: 'pending',
             created_at: new Date().toISOString(),
           };
+          
+          console.log(`[PARSE] chat_id=${chatId} delivery_method="${parsedOrder.delivery_method || 'null'}"`);
           
           // Check if order date is in the future
           const isFuture = isFutureDate(orderData.event_date);
@@ -1576,7 +1626,8 @@ async function handleTelegramCommand(message) {
           await sendTelegramMessage(chatId, errorMessage, null, replyToId);
         }
       } else {
-        // No payload - send instruction
+        // No payload - set state to AWAITING_FORM and send instruction
+        setOrderState(chatId, userId, chatType, 'AWAITING_FORM');
         const instruction = chatType === 'private' 
           ? 'Silakan paste format pesanan yang sudah diisi ya kak 😊\n(Template ada di /help)'
           : 'Silakan kirim /pesan@dawetkemayumenteng_bot + format pesanan dalam 1 pesan ya kak 😊 (template di /help).';
@@ -1599,31 +1650,27 @@ async function handleTelegramCommand(message) {
       break;
     case '/help':
       sendTelegramMessage(chatId, 
-        '📋 **Format Pesanan:**\n\n' +
-        'Nama: [Nama Anda]\n' +
-        'No hp: [Nomor HP Anda]\n' +
-        'Alamat:\n' +
-        '[Alamat lengkap pengiriman]\n' +
-        '(Titik: [Titik referensi jika ada])\n' +
-        'Nama event (jika untuk event): [Nama event]\n' +
-        'Durasi event: [Durasi event]\n' +
-        'Tanggal: [DD/MM/YYYY]\n' +
-        '*Jam kirim: [HH.MM]*\n' +
-        'Detail pesanan:\n' +
-        '- [Jumlah] x [Nama Item]\n' +
-        '- [Jumlah] x [Nama Item + Topping]\n' +
-        '- [Catatan tambahan]\n\n' +
-        '**Contoh:**\n' +
-        'Nama: Budi Santoso\n' +
-        'No hp: 081234567890\n' +
-        'Alamat: Jl. Contoh No. 123, Jakarta\n' +
-        'Tanggal: 15/01/2026\n' +
-        '*Jam kirim: 14.00*\n' +
-        'Detail pesanan:\n' +
-        '- 10 x Dawet Medium + Nangka\n' +
-        '- 5 x Dawet Medium Original\n' +
-        '- Packaging styrofoam\n\n' +
-        'Kirim pesanan Anda dengan format di atas!'
+        '📝 Silakan kirim pesanan Anda dengan format berikut:\n\n' +
+        'Nama Pemesan:\n' +
+        'Nama Penerima:\n' +
+        'No HP Penerima:\n' +
+        'Alamat Penerima:\n\n' +
+        'Nama Event (jika ada):\n' +
+        'Durasi Event (dalam jam):\n\n' +
+        'Tanggal Event: DD/MM/YYYY\n' +
+        'Waktu Kirim (jam): HH:MM\n\n' +
+        'Detail Pesanan:\n' +
+        'Jumlah x Nama Item\n' +
+        'Jumlah x Nama Item\n\n' +
+        'Packaging Styrofoam\n' +
+        '(1 box Rp40.000 untuk 50 cup): YA / TIDAK\n\n' +
+        'Metode Pengiriman:\n' +
+        'Pickup / GrabExpress / Custom\n\n' +
+        'Biaya Pengiriman (Rp):\n' +
+        '(diisi oleh Admin)\n\n' +
+        'Notes:\n\n' +
+        'Mendapatkan info Dawet Kemayu Menteng dari:\n' +
+        'Teman / Instagram / Facebook / TikTok / Lainnya'
       );
       break;
     // Admin commands (PRD requirements)
@@ -2724,15 +2771,15 @@ app.listen(PORT, async () => {
  * Start reminder scheduler (checks for H-4/H-3/H-1 reminders)
  */
 function startReminderScheduler() {
-  // Check immediately on startup
-  checkAndSendRemindersForToday(sendTelegramMessage);
+  // Run daily job immediately on startup
+  runDailyRemindersJob(sendTelegramMessage);
   
-  // Then check every 6 hours
+  // Then run once per day (every 24 hours)
   setInterval(() => {
-    checkAndSendRemindersForToday(sendTelegramMessage);
-  }, 6 * 60 * 60 * 1000); // 6 hours
+    runDailyRemindersJob(sendTelegramMessage);
+  }, 24 * 60 * 60 * 1000); // 24 hours in milliseconds
   
-  console.log('✅ Reminder scheduler started (checks every 6 hours)');
+  console.log('✅ Reminder scheduler started (runs daily job every 24 hours)');
 }
 
 /**
