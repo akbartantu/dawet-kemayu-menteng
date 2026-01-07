@@ -618,13 +618,6 @@ async function handleTelegramMessage(message) {
           }
       
           logger.debug(`[ORDER_PARSE] Parsed fields`);
-        customer_name: parsedOrder.customer_name ? '✓' : '✗',
-        phone_number: parsedOrder.phone_number ? '✓' : '✗',
-        address: parsedOrder.address ? '✓' : '✗',
-        items_count: parsedOrder.items.length,
-        event_date: parsedOrder.event_date ? '✓' : '✗',
-        delivery_time: parsedOrder.delivery_time ? '✓' : '✗',
-      });
       
       // Get price list to check if notes are actually items
       const priceList = await getPriceList();
