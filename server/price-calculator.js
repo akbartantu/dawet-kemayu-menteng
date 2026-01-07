@@ -478,8 +478,8 @@ export function formatInvoice(order, priceList) {
   const totalAmount = order.total_amount || order.final_total || subtotal + packagingPrice + shippingPrice;
   const dpMinimum = calculateMinDP(totalAmount);
   
-  // Get shipping method
-  const metodePengiriman = order.shipping_method || order.delivery_method || '-';
+  // Get shipping method (delivery_method is the canonical field)
+  const metodePengiriman = order.delivery_method || order.shipping_method || '-';
   
   // Build item list with prices (exclude packaging if found)
   let itemList = '';

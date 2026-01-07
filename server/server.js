@@ -677,6 +677,7 @@ async function handleTelegramMessage(message) {
           created_at: new Date().toISOString(),
         };
         
+        console.log(`[TRACE assign] order.delivery_method="${orderData.delivery_method || 'null'}"`);
         console.log(`[TRACE delivery_fee] before_save.delivery_fee=${orderData.delivery_fee}`);
         console.log(`[TRACE save] delivery_method="${orderData.delivery_method}"`);
         console.log(`[PARSE] chat_id=${chatId} delivery_method="${parsedOrder.delivery_method || 'null'}"`);
@@ -1620,6 +1621,7 @@ async function handleTelegramCommand(message) {
             created_at: new Date().toISOString(),
           };
           
+          console.log(`[TRACE assign] order.delivery_method="${orderData.delivery_method || 'null'}"`);
           console.log(`[PARSE] chat_id=${chatId} delivery_method="${parsedOrder.delivery_method || 'null'}"`);
           
           // Check if order date is in the future

@@ -905,7 +905,8 @@ function formatRecapMessage(orders, date) {
     message += `👤 Customer: ${customerName}\n`;
     message += `📞 Phone: ${phoneNumber}\n`;
     message += `📍 Address: ${address}\n\n`;
-    message += `🕐 Delivery Time: ${deliveryTime}\n\n`;
+    message += `🕐 Delivery Time: ${deliveryTime}\n`;
+    message += `🚚 Delivery Method: ${deliveryMethod}\n\n`;
     message += `📦 Items:\n${itemsList}`;
     message += `\n📝 Notes:\n${notesStr}\n\n`;
     message += `✅ Payment Status: ${paymentStatusText}\n\n`;
@@ -1089,7 +1090,8 @@ function formatOrderListMessage(orders, date) {
     message += `👤 Customer: ${customerName}\n`;
     message += `📞 Phone: ${phoneNumber}\n`;
     message += `📍 Address: ${address}\n\n`;
-    message += `🕐 Delivery Time: ${deliveryTime}\n\n`;
+    message += `🕐 Delivery Time: ${deliveryTime}\n`;
+    message += `🚚 Delivery Method: ${deliveryMethod}\n\n`;
     message += `📦 Items:\n${itemsList}`;
     message += `\n📝 Notes:\n${notesStr}\n\n`;
     message += `✅ Payment Status: ${paymentStatusText}\n\n`;

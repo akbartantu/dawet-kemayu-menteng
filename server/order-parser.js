@@ -180,8 +180,9 @@ export function parseOrderFromMessage(messageText) {
     delivery_time: null,
     items: [],
     notes: [],
-    shipping_fee: null, // Biaya Pengiriman (Ongkir) - canonical field
-    shipping_fee_source: null, // 'USER_INPUT', 'USER_EMPTY', 'NOT_PROVIDED'
+    delivery_fee: null, // Biaya Pengiriman (Ongkir) - canonical field for Google Sheets
+    delivery_fee_source: null, // 'USER_INPUT', 'USER_EMPTY', 'NOT_PROVIDED'
+    delivery_method: null, // Metode pengiriman - FIRST-CLASS FIELD (not in notes)
   };
 
   const lines = normalizedText.split('\n').map(line => line.trim()).filter(line => line);
@@ -368,6 +369,41 @@ export function parseOrderFromMessage(messageText) {
       continue;
     }
 
+    // Parse Metode pengiriman (V1 format, robust regex with multiline support)
+    if (line.match(/^Metode\s+pengiriman\s*:?\s*(.+)$/im)) {
+      const originalLine = line;
+      let method = line.replace(/^Metode\s+pengiriman\s*:?\s*/i, '').trim();
+      
+      // Normalize multiple spaces to single space
+      method = method.replace(/\s+/g, ' ');
+      
+      console.log(`[TRACE parse] delivery_method_raw="${method}"`);
+      
+      if (!method || method === '-') {
+        order.delivery_method = '-';
+        console.log(`[TRACE parse] delivery_method_final="-" (empty)`);
+      } else {
+        // Check if it's a placeholder (contains "/" AND all three options)
+        const methodLower = method.toLowerCase();
+        const isPlaceholder = method.includes('/') && 
+                              methodLower.includes('pickup') && 
+                              methodLower.includes('grabexpress') && 
+                              methodLower.includes('custom');
+        
+        if (isPlaceholder) {
+          // Placeholder menu - treat as not selected
+          order.delivery_method = '-';
+          console.log(`[TRACE parse] delivery_method_final="-" (placeholder detected)`);
+        } else {
+          // Standardize capitalization for valid values, otherwise keep raw value
+          const normalized = normalizeDeliveryMethod(method);
+          order.delivery_method = normalized;
+          console.log(`[TRACE parse] delivery_method_final="${normalized}"`);
+        }
+      }
+      continue;
+    }
+
     // Parse order details (case-insensitive)
     if (line.match(/^Detail\s+[Pp]esanan\s*:?\s*$/i)) {
       orderDetailsStarted = true;
@@ -518,6 +554,32 @@ export function validateOrder(order) {
     valid: errors.length === 0,
     errors: errors,
   };
+}
+
+/**
+ * Normalize delivery method value
+ * Standardizes common values (Pickup, GrabExpress, Custom) and preserves unknown values
+ * @param {string} method - Raw delivery method value
+ * @returns {string} Normalized delivery method
+ */
+function normalizeDeliveryMethod(method) {
+  if (!method || typeof method !== 'string') {
+    return '-';
+  }
+  
+  const methodLower = method.toLowerCase().trim();
+  
+  // Standardize valid values
+  if (methodLower === 'pickup') {
+    return 'Pickup';
+  } else if (methodLower === 'grabexpress' || methodLower === 'grab express') {
+    return 'GrabExpress';
+  } else if (methodLower === 'custom') {
+    return 'Custom';
+  }
+  
+  // For unknown values (e.g., "Gojek", "Kurir"), keep original casing
+  return method.trim();
 }
 
 /**
@@ -676,6 +738,7 @@ export function parseOrderMessageV2(messageText) {
     notes: [],
     delivery_fee: null, // Biaya Pengiriman (Ongkir) - canonical field for Google Sheets
     delivery_fee_source: null, // 'USER_INPUT', 'USER_EMPTY', 'NOT_PROVIDED'
+    delivery_method: null, // Metode pengiriman - FIRST-CLASS FIELD (not in notes)
   };
 
   if (!normalizedText || normalizedText.length === 0) {
@@ -882,20 +945,31 @@ export function parseOrderMessageV2(messageText) {
       continue;
     }
 
-    // Parse Metode pengiriman
+    // Parse Metode pengiriman - ASSIGN TO delivery_method (NOT notes)
     if (line.match(/^Metode\s+pengiriman\s*:?\s*(.+)$/i)) {
       const method = line.replace(/^Metode\s+pengiriman\s*:?\s*/i, '').trim();
-      if (method && method !== '-') {
-        // Normalize: pickup | grabexpress | custom
+      console.log(`[TRACE parse] delivery_method_raw="${method}"`);
+      
+      if (!method || method === '-') {
+        order.delivery_method = '-';
+        console.log(`[TRACE parse] delivery_method_final="-" (empty or placeholder)`);
+      } else {
+        // Check if it's a placeholder menu (contains "/" AND all three options)
         const methodLower = method.toLowerCase();
-        if (methodLower.includes('pickup')) {
-          order.notes.push('Metode Pengiriman: Pickup');
-        } else if (methodLower.includes('grab') || methodLower.includes('grabexpress')) {
-          order.notes.push('Metode Pengiriman: GrabExpress');
-        } else if (methodLower.includes('custom')) {
-          order.notes.push('Metode Pengiriman: Custom');
+        const isPlaceholder = method.includes('/') && 
+                              methodLower.includes('pickup') && 
+                              methodLower.includes('grabexpress') && 
+                              methodLower.includes('custom');
+        
+        if (isPlaceholder) {
+          // Placeholder menu - treat as not selected
+          order.delivery_method = '-';
+          console.log(`[TRACE parse] delivery_method_final="-" (placeholder detected)`);
         } else {
-          order.notes.push(`Metode Pengiriman: ${method}`);
+          // Standardize capitalization for valid values, otherwise keep raw value
+          const normalized = normalizeDeliveryMethod(method);
+          order.delivery_method = normalized;
+          console.log(`[TRACE parse] delivery_method_final="${normalized}"`);
         }
       }
       continue;
