@@ -9,6 +9,7 @@ import dotenv from 'dotenv';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import logger from './logger.js';
+import logger from './logger.js';
 import {
   initializeStorage,
   saveMessage,
@@ -275,7 +276,7 @@ app.post('/api/webhooks/telegram', async (req, res) => {
   const chatId = update.message?.chat?.id || update.callback_query?.message?.chat?.id || 'unknown';
   const textPreview = update.message?.text?.substring(0, 50) || update.callback_query?.data?.substring(0, 50) || 'no text';
   
-  console.log('📨 Received Telegram webhook:', JSON.stringify(req.body, null, 2));
+  logger.debug('Received Telegram webhook');
 
   // Always respond 200 OK to Telegram immediately
   res.status(200).send('OK');
@@ -539,11 +540,11 @@ async function handleTelegramMessage(message) {
   if (chatType === 'group' || chatType === 'supergroup') {
     const isCommand = messageText.startsWith('/');
 
-    console.log(`🔍 [GROUP_GATE] chatType: ${chatType}, isCommand: ${isCommand}`);
+    logger.debug(`[GROUP_GATE] chatType: ${chatType}, isCommand: ${isCommand}`);
 
     // If not a command, ignore silently (privacy mode)
     if (!isCommand) {
-      console.log(`⏸️ [GROUP_GATE] Ignoring message (not a command, privacy mode)`);
+      logger.debug(`[GROUP_GATE] Ignoring message (not a command, privacy mode)`);
       return; // Silent ignore - no response
     }
 
@@ -596,7 +597,7 @@ async function handleTelegramMessage(message) {
         try {
           // Detect format and parse
           const detectedFormat = detectOrderFormat(message.text);
-          console.log(`🔍 [ORDER_PARSE] Private chat auto-parse - format: ${detectedFormat || 'none'}, state: ${state?.mode || 'none'}`);
+          logger.debug(`[ORDER_PARSE] Private chat auto-parse - format: ${detectedFormat || 'none'}`);
           
           let parsedOrder;
           try {
@@ -617,7 +618,7 @@ async function handleTelegramMessage(message) {
             throw parseError; // Re-throw other errors
           }
       
-          console.log(`🔍 [ORDER_PARSE] Parsed fields:`, {
+          logger.debug(`[ORDER_PARSE] Parsed fields`);
         customer_name: parsedOrder.customer_name ? '✓' : '✗',
         phone_number: parsedOrder.phone_number ? '✓' : '✗',
         address: parsedOrder.address ? '✓' : '✗',
@@ -652,7 +653,7 @@ async function handleTelegramMessage(message) {
         if (!orderId) {
           throw new Error('Failed to generate order ID');
         }
-        console.log(`🔍 [ORDER_CREATE] Generated Order ID: ${orderId}`);
+        logger.debug(`[ORDER_CREATE] Generated Order ID: ${orderId}`);
         
         // Create order
         const orderData = {
@@ -767,7 +768,7 @@ async function handleTelegramMessage(message) {
           await sendTelegramMessage(message.chat.id, confirmationText, replyMarkup, replyToId);
           // orderProcessed already set above, but ensure it's still true
           orderProcessed = true;
-          console.log(`✅ [ORDER_HANDLER] Order confirmation sent, orderProcessed=true, returning early`);
+          logger.debug(`[ORDER_HANDLER] Order confirmation sent`);
           return; // CRITICAL: Return immediately to prevent fall-through
         }
       } else {
@@ -826,11 +827,10 @@ async function handleTelegramMessage(message) {
           // This is a parse error - not an order format, continue to other handlers
           // But only log if orderProcessed is still false (meaning it's truly not an order)
           if (!orderProcessed) {
-            console.log('⚠️ [ORDER_PARSE] Not an order format or parse error, checking other handlers...');
-            console.log('⚠️ [ORDER_PARSE] Error:', error.message);
-            console.log('⚠️ [ORDER_PARSE] Parse failed - will try other handlers (menu/FAQ/fallback)');
+            logger.debug('[ORDER_PARSE] Not an order format or parse error, checking other handlers');
+            logger.warn('[ORDER_PARSE] Error:', error.message);
           } else {
-            console.log('✅ [ORDER_PARSE] Order was processed despite error, orderProcessed=true');
+            logger.debug('[ORDER_PARSE] Order was processed despite error');
           }
         }
         }
@@ -838,12 +838,12 @@ async function handleTelegramMessage(message) {
     } else {
       // Group/supergroup: non-command messages are already filtered out above
       // This code path should not be reached, but log for safety
-      console.log(`⏸️ [ORDER_PARSE] Skipping auto-parse in ${chatType} (orders must use /pesan command)`);
+      logger.debug(`[ORDER_PARSE] Skipping auto-parse in ${chatType}`);
     }
 
     // CRITICAL: Return early if order was processed to prevent fall-through to menu/FAQ
     if (orderProcessed) {
-      console.log('✅ [ORDER_PARSE] Order processed, skipping menu/FAQ handlers');
+      logger.debug('[ORDER_PARSE] Order processed, skipping menu/FAQ handlers');
       return; // Exit handler to prevent extra messages
     }
 
@@ -872,7 +872,7 @@ async function handleTelegramMessage(message) {
       // Handle FAQ questions (ONLY if not an order)
       // Double-check: if orderProcessed is true, skip FAQ
       if (!orderProcessed && isFAQQuestion(message.text)) {
-        console.log(`🔍 [FAQ_HANDLER] FAQ question detected: ${message.text.substring(0, 50)}...`);
+        logger.debug(`[FAQ_HANDLER] FAQ question detected`);
         const faqAnswer = getFAQAnswer(message.text);
         const replyToId = message.chat.type !== 'private' ? message.message_id : null;
         await sendTelegramMessage(message.chat.id, faqAnswer, null, replyToId);
@@ -2767,22 +2767,14 @@ app.get('*', (req, res) => {
 app.listen(PORT, async () => {
   const renderUrl = process.env.RENDER_EXTERNAL_URL || process.env.WEBHOOK_URL || 'missing';
   const mode = process.env.NODE_ENV === 'production' ? 'webhook' : 'polling';
-  console.log(`[BOOT] render_url=${renderUrl}`);
+  logger.debug(`[BOOT] render_url=${renderUrl}`);
   
-  console.log(`🚀 Server running on http://localhost:${PORT}`);
-  console.log(`📡 Telegram webhook: http://localhost:${PORT}/api/webhooks/telegram`);
-  console.log(`💬 Send Telegram: POST http://localhost:${PORT}/api/messages/send`);
-  console.log(`📝 Manual WhatsApp: POST http://localhost:${PORT}/api/messages/whatsapp-manual`);
-  console.log(`\n📋 Setup Instructions:`);
-  console.log(`   1. Set TELEGRAM_BOT_TOKEN in .env file`);
-  console.log(`   2. Set DATABASE_URL in .env file (PostgreSQL)`);
-  console.log(`   3. For LOCAL development: Polling will start automatically`);
-  console.log(`\n🔄 Initializing Google Sheets storage...`);
+  logger.info(`Server running on port ${PORT}`);
   
   try {
     // Initialize Google Sheets
     await initializeStorage();
-    console.log(`✅ Google Sheets ready`);
+    logger.info(`Google Sheets ready`);
   } catch (error) {
     console.error(`⚠️  Google Sheets initialization failed:`, error.message);
     console.log(`   Make sure GOOGLE_SERVICE_ACCOUNT_KEY_FILE and GOOGLE_SPREADSHEET_ID are set in .env`);
