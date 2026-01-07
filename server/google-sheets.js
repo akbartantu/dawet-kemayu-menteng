@@ -268,20 +268,17 @@ export async function getSheetHeaderMap(sheetName, options = {}) {
     const now = Date.now();
     if (cached && (now - cached.fetchedAtMs) < HEADER_MAP_CACHE_TTL_MS) {
       const ageMs = now - cached.fetchedAtMs;
-      console.log(`[TRACE header_cache] Orders header source = CACHE, age_ms=${ageMs}`);
       return cached.headerMap;
     }
     
     // Single-flight: If a fetch is already in progress, await the same promise
     if (headerMapInflight.has(cacheKey)) {
-      console.log(`[TRACE header_cache] Orders header source = INFLIGHT (dedupe)`);
       return await headerMapInflight.get(cacheKey);
     }
     
     // Start fetch
     const fetchPromise = (async () => {
       try {
-        console.log(`[TRACE header_cache] Orders header source = FETCH`);
         
         // Read row 1 with explicit wide range to ensure all columns are included
         // Use a wide range (A1:ZZ1) to capture all columns, even if some are empty
@@ -320,36 +317,7 @@ export async function getSheetHeaderMap(sheetName, options = {}) {
         });
         
         // Diagnostic logs (only for Orders sheet to avoid spam)
-        if (sheetName === 'Orders') {
-          console.log(`[HEADER_MAP Orders] headers_count=${headers.length}`);
-          if (headers.length > 0) {
-            const lastHeaders = headers.slice(-5);
-            console.log(`[HEADER_MAP Orders] last_headers=${JSON.stringify(lastHeaders)}`);
-            
-            // Check event_date header (before headerMap is built)
-            const eventDateHeaderRaw = headers.find(h => String(h || '').trim().toLowerCase() === 'event_date');
-            const eventDateIndexRaw = headers.findIndex(h => String(h || '').trim().toLowerCase() === 'event_date');
-            console.log(`[HEADER_MAP Orders] event_date_header_raw="${eventDateHeaderRaw || 'NOT_FOUND'}"`);
-            console.log(`[HEADER_MAP Orders] event_date_index_raw=${eventDateIndexRaw !== -1 ? eventDateIndexRaw : -1}`);
-            
-            // Check if delivery_method is in the headers
-            const deliveryMethodIndex = headers.findIndex(h => String(h || '').trim().toLowerCase() === 'delivery_method');
-            console.log(`[HEADER_MAP Orders] delivery_method found at index=${deliveryMethodIndex !== -1 ? deliveryMethodIndex : -1}`);
-            
-            // Also check headerTextMap
-            console.log(`[HEADER_MAP Orders] delivery_method in map=${headerTextMap['delivery_method'] !== undefined ? 'YES' : 'NO'}`);
-            if (headerTextMap['delivery_method'] !== undefined) {
-              console.log(`[HEADER_MAP Orders] delivery_method mapped to index=${headerTextMap['delivery_method']}`);
-            }
-            
-            // Log first 10 and last 10 header names from headerTextMap
-            const allHeaderNames = Object.keys(headerTextMap);
-            const first10 = allHeaderNames.slice(0, 10);
-            const last10 = allHeaderNames.slice(-10);
-            console.log(`[HEADER_MAP Orders] first10_headers=${JSON.stringify(first10)}`);
-            console.log(`[HEADER_MAP Orders] last10_headers=${JSON.stringify(last10)}`);
-          }
-        }
+        // Header map built successfully
         
         // Log legacy columns if found
         if (legacyColumns.length > 0) {
@@ -1154,11 +1122,9 @@ async function computeOrderTotals(orderData, priceList) {
     if (totalCups > 0) {
       const boxes = Math.ceil(totalCups / 50);
       packagingFee = boxes * 40000;
-      console.log(`🔍 [COMPUTE_TOTALS] Total cups: ${totalCups}, Boxes needed: ${boxes}, Packaging fee: Rp ${packagingFee}`);
     } else {
       // If no cups detected but packaging requested, assume 1 box
       packagingFee = 40000;
-      console.log(`⚠️ [COMPUTE_TOTALS] No cups detected but packaging requested, defaulting to 1 box (Rp 40,000)`);
     }
   }
   
@@ -1167,7 +1133,6 @@ async function computeOrderTotals(orderData, priceList) {
     const deliveryFee = orderData.delivery_fee !== null && orderData.delivery_fee !== undefined 
       ? (typeof orderData.delivery_fee === 'number' ? orderData.delivery_fee : parseFloat(orderData.delivery_fee) || 0)
       : 0;
-    console.log(`[TRACE delivery_fee] payload.delivery_fee=${deliveryFee}`);
   
   // Total amount (canonical - replaces final_total)
   const totalAmount = productTotal + packagingFee + deliveryFee;
@@ -1186,7 +1151,6 @@ async function computeOrderTotals(orderData, priceList) {
   const { calculateRemainingBalance } = await import('./payment-tracker.js');
   const remainingBalance = calculateRemainingBalance(totalAmount, paidAmount);
   
-  console.log(`🔍 [COMPUTE_TOTALS] Using total_amount column (canonical)`);
   
   return {
     productTotal,
@@ -1217,17 +1181,13 @@ export async function saveOrder(orderData, options = {}) {
     }
     orderData.id = orderId;
     
-    console.log(`🔍 [SAVE_ORDER] Starting save for order: ${orderId}`);
-    
     // Normalize event_date to YYYY-MM-DD format before saving
     const { normalizeEventDate } = await import('./date-utils.js');
     const originalEventDate = orderData.event_date;
     if (orderData.event_date) {
       try {
         orderData.event_date = normalizeEventDate(orderData.event_date);
-        if (orderData.event_date !== originalEventDate) {
-          console.log(`🔍 [SAVE_ORDER] Event date normalized: "${originalEventDate}" → "${orderData.event_date}"`);
-        }
+        // Event date normalized
       } catch (error) {
         console.error(`❌ [SAVE_ORDER] Failed to normalize event_date "${originalEventDate}":`, error.message);
         throw new Error(`Invalid event_date format: ${originalEventDate}. ${error.message}`);
@@ -1241,7 +1201,6 @@ export async function saveOrder(orderData, options = {}) {
       try {
         orderData.delivery_time = normalizeDeliveryTime(orderData.delivery_time);
         if (orderData.delivery_time !== originalDeliveryTime) {
-          console.log(`🔍 [SAVE_ORDER] Delivery time normalized: "${originalDeliveryTime}" → "${orderData.delivery_time}"`);
         }
       } catch (error) {
         console.error(`❌ [SAVE_ORDER] Failed to normalize delivery_time "${originalDeliveryTime}":`, error.message);
@@ -1359,17 +1318,14 @@ export async function saveOrder(orderData, options = {}) {
       }
       
       // Found after retry - use the retry header map
-      console.log(`✅ [SAVE_ORDER] delivery_method column found at index ${retryHeaderMap.delivery_method} (after cache invalidation)`);
+      // delivery_method column found after cache invalidation
       // Update headerMap for rest of function
       Object.assign(headerMap, retryHeaderMap);
     } else {
-      console.log(`✅ [SAVE_ORDER] delivery_method column found at index ${headerMap.delivery_method}`);
+      // delivery_method column validated
     }
     
     // Diagnostic log
-    console.log(`[HEADER_MAP] delivery_method index=${headerMap.delivery_method !== undefined ? headerMap.delivery_method : -1}`);
-    
-    console.log(`[TRACE save] delivery_method="${orderData.delivery_method || orderData.shipping_method || '-'}"`);
 
     // Get price list for calculations
     const priceList = await getPriceList();
@@ -1414,7 +1370,6 @@ export async function saveOrder(orderData, options = {}) {
     // Build row using header map
     const row = buildRowFromMap(headerMap, dataObject);
     
-    console.log(`🔍 [SAVE_ORDER] Row prepared with ${row.filter(v => v !== '').length} non-empty values`);
 
     // UPSERT: Check if order exists and update, otherwise append
     const existingRowIndex = await findRowByOrderId('Orders', orderId);
@@ -1446,7 +1401,7 @@ export async function saveOrder(orderData, options = {}) {
             data: updateData,
           },
         });
-        console.log(`✅ [SAVE_ORDER] Updated existing order ${orderId} at row ${existingRowIndex}`);
+        // Order updated successfully
       }
     } else {
       // APPEND new row (only if doesn't exist)
@@ -1463,7 +1418,7 @@ export async function saveOrder(orderData, options = {}) {
           },
         });
       });
-      console.log(`✅ [SAVE_ORDER] saved invoice ${orderId} with delivery_fee=${totals.deliveryFee}`);
+      // Order saved successfully
     }
 
     // Post-write validation: Check for duplicates (safety net)
@@ -2515,7 +2470,6 @@ export async function getAllOrders(limit = 100) {
     }
     
     const range = `Orders!A:${columnIndexToLetter(headerMap.__headersLength - 1)}`;
-    console.log(`[ORDERS_CMD] spreadsheetId=${SPREADSHEET_ID} range=${range} sheet=Orders`);
     
     // Read extended range to include all columns
     const response = await retryWithBackoff(async () => {
@@ -2536,7 +2490,6 @@ export async function getAllOrders(limit = 100) {
       for (let i = 1; i < Math.min(6, rows.length); i++) {
         const row = rows[i];
         const eventDateRaw = row[eventDateIndex] || '';
-        console.log(`[ORDERS_ROW] row${i-1}_event_date_raw="${eventDateRaw}"`);
       }
     }
 

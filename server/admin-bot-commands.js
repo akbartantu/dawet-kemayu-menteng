@@ -267,6 +267,8 @@ export async function handleParseOrder(chatId, userId, messageText, sendMessage,
       delivery_time: parsedOrder.delivery_time,
       items: parsedOrder.items,
       notes: parsedOrder.notes,
+      delivery_fee: parsedOrder.delivery_fee !== null && parsedOrder.delivery_fee !== undefined ? parsedOrder.delivery_fee : 0, // Biaya Pengiriman (Ongkir) - default to 0 if not provided
+      delivery_method: parsedOrder.delivery_method || null, // Metode pengiriman (stored in Orders.delivery_method)
       status: 'pending',
       created_at: new Date().toISOString(),
     };

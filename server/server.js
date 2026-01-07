@@ -671,16 +671,11 @@ async function handleTelegramMessage(message) {
           delivery_time: parsedOrder.delivery_time,
           items: parsedOrder.items,
           notes: parsedOrder.notes,
-          delivery_fee: parsedOrder.delivery_fee !== null && parsedOrder.delivery_fee !== undefined ? parsedOrder.delivery_fee : null, // Biaya Pengiriman (Ongkir)
+          delivery_fee: parsedOrder.delivery_fee !== null && parsedOrder.delivery_fee !== undefined ? parsedOrder.delivery_fee : 0, // Biaya Pengiriman (Ongkir) - default to 0 if not provided
           delivery_method: parsedOrder.delivery_method || null, // Metode pengiriman (stored in Orders.delivery_method)
           status: 'pending',
           created_at: new Date().toISOString(),
         };
-        
-        console.log(`[TRACE assign] order.delivery_method="${orderData.delivery_method || 'null'}"`);
-        console.log(`[TRACE delivery_fee] before_save.delivery_fee=${orderData.delivery_fee}`);
-        console.log(`[TRACE save] delivery_method="${orderData.delivery_method}"`);
-        console.log(`[PARSE] chat_id=${chatId} delivery_method="${parsedOrder.delivery_method || 'null'}"`);
 
         // Check if order date is in the future
         const isFuture = isFutureDate(orderData.event_date);
@@ -1615,7 +1610,7 @@ async function handleTelegramCommand(message) {
             delivery_time: parsedOrder.delivery_time,
             items: parsedOrder.items,
             notes: parsedOrder.notes,
-            delivery_fee: parsedOrder.delivery_fee !== null && parsedOrder.delivery_fee !== undefined ? parsedOrder.delivery_fee : null, // Biaya Pengiriman (Ongkir)
+            delivery_fee: parsedOrder.delivery_fee !== null && parsedOrder.delivery_fee !== undefined ? parsedOrder.delivery_fee : 0, // Biaya Pengiriman (Ongkir) - default to 0 if not provided
             delivery_method: parsedOrder.delivery_method || null, // Metode pengiriman (stored in Orders.delivery_method)
             status: 'pending',
             created_at: new Date().toISOString(),

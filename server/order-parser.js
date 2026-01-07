@@ -65,8 +65,6 @@ export function extractDeliveryTimeFromMessage(messageText) {
     // Priority 1: Explicit "Jam kirim:" or "Waktu kirim:"
     if (lineLower.match(/^(jam|waktu)\s+kirim\s*:?\s*/i)) {
       matchedLine = line;
-      console.log(`🔍 [PARSE] Found explicit delivery time line: "${line}"`);
-      
       // Extract time token after the keyword
       const timeMatch = line.match(/(?:jam|waktu)\s+kirim\s*:?\s*(.+)/i);
       if (timeMatch && timeMatch[1]) {
@@ -77,8 +75,6 @@ export function extractDeliveryTimeFromMessage(messageText) {
     // Priority 2: "Kirim dari outlet:"
     else if (lineLower.match(/kirim\s+dari\s+outlet\s*:?\s*/i) && !matchedLine) {
       matchedLine = line;
-      console.log(`🔍 [PARSE] Found "Kirim dari outlet" line: "${line}"`);
-      
       // Extract time token after "Kirim dari outlet:"
       const timeMatch = line.match(/kirim\s+dari\s+outlet\s*:?\s*(.+)/i);
       if (timeMatch && timeMatch[1]) {
@@ -92,8 +88,6 @@ export function extractDeliveryTimeFromMessage(messageText) {
       const hasTimePattern = /(\d{1,2}[.:]\d{1,2}|\d{1,2}(?:\s*(?:wib|wita|wit|jam|pukul))?)/i.test(line);
       if (hasTimePattern) {
         matchedLine = line;
-        console.log(`🔍 [PARSE] Found "kirim" line with time pattern: "${line}"`);
-        
         // Extract time token - look for time pattern after "kirim"
         const timeMatch = line.match(/kirim(?:\s+(?:dari|pukul|jam))?\s*:?\s*(.+)/i);
         if (timeMatch && timeMatch[1]) {
@@ -114,13 +108,11 @@ export function extractDeliveryTimeFromMessage(messageText) {
     // Look for time patterns anywhere in the message
     const globalTimeMatch = cleaned.match(/(\d{1,2}[.:]\d{1,2}|\d{1,2})/);
     if (globalTimeMatch) {
-      console.log(`🔍 [PARSE] Found time pattern in message (no keyword match): "${globalTimeMatch[1]}"`);
       timeToken = globalTimeMatch[1];
     }
   }
 
   if (!timeToken) {
-    console.log(`⚠️ [PARSE] delivery_time not found in message`);
     return null;
   }
 
@@ -133,19 +125,14 @@ export function extractDeliveryTimeFromMessage(messageText) {
     .trim();
 
   if (!cleanedToken) {
-    console.log(`⚠️ [PARSE] Time token became empty after cleaning: "${timeToken}"`);
     return null;
   }
-
-  console.log(`🔍 [PARSE] Extracted time token: "${cleanedToken}"`);
 
   // Step 4: Normalize using normalizeDeliveryTime()
   try {
     const normalized = normalizeDeliveryTime(cleanedToken);
-    console.log(`✅ [PARSE] Normalized delivery_time: "${normalized}"`);
     return normalized;
   } catch (error) {
-    console.warn(`⚠️ [PARSE] Failed to normalize delivery_time "${cleanedToken}":`, error.message);
     return null;
   }
 }
@@ -164,10 +151,7 @@ export function parseOrderFromMessage(messageText) {
   const rawLength = messageText ? messageText.length : 0;
   const normalizedLength = normalizedText.length;
   
-  console.log(`🔍 [PARSE_V1] Text normalization: ${rawLength} → ${normalizedLength} chars`);
-  if (rawLength !== normalizedLength) {
-    console.log(`⚠️ [PARSE_V1] Invisible characters detected and removed (${rawLength - normalizedLength} chars)`);
-  }
+  // Text normalization complete
 
   const order = {
     customer_name: null,
@@ -377,11 +361,8 @@ export function parseOrderFromMessage(messageText) {
       // Normalize multiple spaces to single space
       method = method.replace(/\s+/g, ' ');
       
-      console.log(`[TRACE parse] delivery_method_raw="${method}"`);
-      
       if (!method || method === '-') {
         order.delivery_method = '-';
-        console.log(`[TRACE parse] delivery_method_final="-" (empty)`);
       } else {
         // Check if it's a placeholder (contains "/" AND all three options)
         const methodLower = method.toLowerCase();
@@ -393,12 +374,10 @@ export function parseOrderFromMessage(messageText) {
         if (isPlaceholder) {
           // Placeholder menu - treat as not selected
           order.delivery_method = '-';
-          console.log(`[TRACE parse] delivery_method_final="-" (placeholder detected)`);
         } else {
           // Standardize capitalization for valid values, otherwise keep raw value
           const normalized = normalizeDeliveryMethod(method);
           order.delivery_method = normalized;
-          console.log(`[TRACE parse] delivery_method_final="${normalized}"`);
         }
       }
       continue;
@@ -407,7 +386,6 @@ export function parseOrderFromMessage(messageText) {
     // Parse order details (case-insensitive)
     if (line.match(/^Detail\s+[Pp]esanan\s*:?\s*$/i)) {
       orderDetailsStarted = true;
-      console.log(`🔍 [PARSE_V1] Found "Detail pesanan" section, starting item extraction`);
       continue;
     }
 
@@ -469,7 +447,6 @@ export function parseOrderFromMessage(messageText) {
         }
       } else {
         // Line starts with number but didn't match - log for debugging
-        console.log(`⚠️ [PARSE_V1] Line starts with number but didn't match item pattern: "${cleanLine}"`);
       }
     }
   }
@@ -480,23 +457,15 @@ export function parseOrderFromMessage(messageText) {
   }
 
   // Set delivery_fee_source if not provided (V1 format doesn't have Biaya Pengiriman field)
+  // Default to 0 (not null) to ensure it's always a number
   if (order.delivery_fee_source === null) {
-    order.delivery_fee = 0;
-    order.delivery_fee_source = 'NOT_PROVIDED';
+    if (order.delivery_fee === null || order.delivery_fee === undefined) {
+      order.delivery_fee = 0;
+      order.delivery_fee_source = 'NOT_PROVIDED';
+    }
   }
 
-  // Log parsing results
-  console.log(`📊 [PARSE_V1] Parse summary:`, {
-    customer_name: order.customer_name ? '✓' : '✗',
-    phone_number: order.phone_number ? '✓' : '✗',
-    address: order.address ? '✓' : '✗',
-    items_count: order.items.length,
-    items_sample: order.items.length > 0 ? `${order.items[0].quantity}x ${order.items[0].name}` : 'none',
-    event_date: order.event_date ? '✓' : '✗',
-    delivery_time: order.delivery_time ? '✓' : '✗',
-    delivery_fee: order.delivery_fee !== null ? `Rp ${order.delivery_fee}` : '✗',
-    delivery_fee_source: order.delivery_fee_source || '✗',
-  });
+  // Parse complete
 
   // Fallback: If delivery_time is still empty, try extracting from natural language
   if (!order.delivery_time || order.delivery_time.trim() === '') {
@@ -504,7 +473,6 @@ export function parseOrderFromMessage(messageText) {
     const extractedTime = extractDeliveryTimeFromMessage(normalizedText);
     if (extractedTime) {
       order.delivery_time = extractedTime;
-      console.log(`✅ [PARSE_V1] Extracted delivery_time from natural language: "${extractedTime}"`);
     }
   } else {
     // Normalize existing delivery_time to ensure HH:MM format
@@ -515,7 +483,6 @@ export function parseOrderFromMessage(messageText) {
         console.log(`🔍 [PARSE_V1] Normalized delivery_time: "${originalTime}" → "${order.delivery_time}"`);
       }
     } catch (error) {
-      console.warn(`⚠️ [PARSE_V1] Failed to normalize existing delivery_time "${order.delivery_time}":`, error.message);
       // Try natural language extraction as fallback
       const extractedTime = extractDeliveryTimeFromMessage(normalizedText);
       if (extractedTime) {
@@ -720,10 +687,7 @@ export function parseOrderMessageV2(messageText) {
   const rawLength = messageText ? messageText.length : 0;
   const normalizedLength = normalizedText.length;
   
-  console.log(`🔍 [PARSE_V2] Text normalization: ${rawLength} → ${normalizedLength} chars`);
-  if (rawLength !== normalizedLength) {
-    console.log(`⚠️ [PARSE_V2] Invisible characters detected and removed (${rawLength - normalizedLength} chars)`);
-  }
+  // Text normalization complete
 
   const order = {
     customer_name: null,
@@ -918,7 +882,6 @@ export function parseOrderMessageV2(messageText) {
             quantity: quantity,
             name: itemName,
           });
-          console.log(`✅ [PARSE_V2] Extracted item: ${quantity}x ${itemName}`);
           continue;
         }
       }
@@ -931,7 +894,6 @@ export function parseOrderMessageV2(messageText) {
         }
       } else {
         // Line starts with number but didn't match - log for debugging
-        console.log(`⚠️ [PARSE_V2] Line starts with number but didn't match item pattern: "${cleanLine}"`);
       }
     }
 
@@ -952,7 +914,6 @@ export function parseOrderMessageV2(messageText) {
       
       if (!method || method === '-') {
         order.delivery_method = '-';
-        console.log(`[TRACE parse] delivery_method_final="-" (empty or placeholder)`);
       } else {
         // Check if it's a placeholder menu (contains "/" AND all three options)
         const methodLower = method.toLowerCase();
@@ -964,12 +925,10 @@ export function parseOrderMessageV2(messageText) {
         if (isPlaceholder) {
           // Placeholder menu - treat as not selected
           order.delivery_method = '-';
-          console.log(`[TRACE parse] delivery_method_final="-" (placeholder detected)`);
         } else {
           // Standardize capitalization for valid values, otherwise keep raw value
           const normalized = normalizeDeliveryMethod(method);
           order.delivery_method = normalized;
-          console.log(`[TRACE parse] delivery_method_final="${normalized}"`);
         }
       }
       continue;
@@ -981,13 +940,10 @@ export function parseOrderMessageV2(messageText) {
       const originalLine = line;
       const cost = line.replace(/^(?:Biaya\s+Pengiriman\s*\(Rp\)|Biaya\s+Pengiriman|Ongkir|Delivery\s+Fee)\s*:?\s*/i, '').trim();
       
-      console.log(`[TRACE delivery_fee] parsed.delivery_fee raw_line="${originalLine}"`);
-      
       if (!cost || cost === '-') {
         // Field exists but is empty
         order.delivery_fee = 0;
         order.delivery_fee_source = 'USER_EMPTY';
-        console.log(`[TRACE delivery_fee] parsed.delivery_fee=0 (source: USER_EMPTY)`);
       } else {
         // Remove "Rp", spaces, dots, commas (thousand separators)
         const costNum = cost.replace(/Rp/gi, '').replace(/\s/g, '').replace(/\./g, '').replace(/,/g, '');
@@ -1011,7 +967,6 @@ export function parseOrderMessageV2(messageText) {
         
         order.delivery_fee = deliveryFee;
         order.delivery_fee_source = 'USER_INPUT';
-        console.log(`[TRACE delivery_fee] parsed.delivery_fee=${deliveryFee} (source: USER_INPUT)`);
       }
       continue;
     }
@@ -1052,23 +1007,15 @@ export function parseOrderMessageV2(messageText) {
   }
 
   // Set delivery_fee_source if not provided
+  // Default to 0 (not null) to ensure it's always a number
   if (order.delivery_fee_source === null) {
-    order.delivery_fee = 0;
-    order.delivery_fee_source = 'NOT_PROVIDED';
+    if (order.delivery_fee === null || order.delivery_fee === undefined) {
+      order.delivery_fee = 0;
+      order.delivery_fee_source = 'NOT_PROVIDED';
+    }
   }
 
-  // Log parsing results
-  console.log(`📊 [PARSE_V2] Parse summary:`, {
-    customer_name: order.customer_name ? '✓' : '✗',
-    phone_number: order.phone_number ? '✓' : '✗',
-    address: order.address ? '✓' : '✗',
-    items_count: order.items.length,
-    items_sample: order.items.length > 0 ? `${order.items[0].quantity}x ${order.items[0].name}` : 'none',
-    event_date: order.event_date ? '✓' : '✗',
-    delivery_time: order.delivery_time ? '✓' : '✗',
-    delivery_fee: order.delivery_fee !== null ? `Rp ${order.delivery_fee}` : '✗',
-    delivery_fee_source: order.delivery_fee_source || '✗',
-  });
+  // Parse complete
 
   // Fallback: If delivery_time is still empty, try extracting from natural language
   if (!order.delivery_time || order.delivery_time.trim() === '') {
