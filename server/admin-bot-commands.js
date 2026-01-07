@@ -1060,8 +1060,21 @@ function formatOrderListMessage(orders, date) {
       }
       
       if (Array.isArray(notes) && notes.length > 0) {
-        // Filter out empty notes
-        const validNotes = notes.filter(note => note && String(note).trim());
+        // Filter out empty notes and packaging-related notes
+        const validNotes = notes.filter(note => {
+          const noteStr = String(note || '').trim();
+          if (!noteStr) return false;
+          // Filter out packaging-related notes
+          const noteLower = noteStr.toLowerCase();
+          if (noteLower.includes('packaging styrofoam') || 
+              noteLower.includes('packaging:') ||
+              noteLower === 'packaging styrofoam' ||
+              noteLower === 'ya' ||
+              noteLower === 'tidak') {
+            return false;
+          }
+          return true;
+        });
         if (validNotes.length > 0) {
           // Join all notes with newline (single line per note)
           notesStr = validNotes.map(note => String(note).trim()).join('\n');
@@ -1069,7 +1082,18 @@ function formatOrderListMessage(orders, date) {
           notesStr = '-';
         }
       } else if (typeof notes === 'string' && notes.trim()) {
-        notesStr = notes.trim();
+        const noteStr = notes.trim();
+        // Filter out packaging-related notes
+        const noteLower = noteStr.toLowerCase();
+        if (noteLower.includes('packaging styrofoam') || 
+            noteLower.includes('packaging:') ||
+            noteLower === 'packaging styrofoam' ||
+            noteLower === 'ya' ||
+            noteLower === 'tidak') {
+          notesStr = '-';
+        } else {
+          notesStr = noteStr;
+        }
       } else {
         notesStr = '-';
       }
@@ -1087,6 +1111,8 @@ function formatOrderListMessage(orders, date) {
     }
     
     // Build order block (new format)
+    const invoiceNumber = order.id || '-';
+    message += `🧾 Invoice: ${invoiceNumber}\n`;
     message += `👤 Customer: ${customerName}\n`;
     message += `📞 Phone: ${phoneNumber}\n`;
     message += `📍 Address: ${address}\n\n`;
