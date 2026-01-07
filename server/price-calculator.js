@@ -5,6 +5,7 @@
 
 import { daysUntilDelivery } from './date-utils.js';
 import { calculateMinDP } from './payment-tracker.js';
+import logger from './logger.js';
 
 /**
  * Parse item name to extract base item and toppings
@@ -155,13 +156,13 @@ export function getUnitPriceFromPriceList(itemName, priceList) {
   }
   
   const normalizedItemName = normalizeProductName(itemName);
-  console.log(`🔍 [PRICE] Looking up price for item: "${itemName}" (normalized: "${normalizedItemName}")`);
+  logger.debug(`[PRICE] Looking up price for item: "${itemName}"`);
   
   // Strategy A: Exact match on normalized name
   for (const [priceListKey, price] of Object.entries(priceList)) {
     const normalizedKey = normalizeProductName(priceListKey);
     if (normalizedKey === normalizedItemName) {
-      console.log(`✅ [PRICE] Exact match found: "${priceListKey}" -> ${price}`);
+      logger.debug(`[PRICE] Exact match found: "${priceListKey}" -> ${price}`);
       return price;
     }
   }
@@ -194,7 +195,7 @@ export function getUnitPriceFromPriceList(itemName, priceList) {
       }
       
       if (matches && normalizedKey.includes('dawet')) {
-        console.log(`✅ [PRICE] Fuzzy match found: "${priceListKey}" -> ${price}`);
+        logger.debug(`[PRICE] Fuzzy match found: "${priceListKey}" -> ${price}`);
         return price;
       }
     }
@@ -206,13 +207,13 @@ export function getUnitPriceFromPriceList(itemName, priceList) {
     if (parsed.base) {
       const basePrice = priceList[parsed.base] || null;
       if (basePrice) {
-        console.log(`✅ [PRICE] Found base price via parsing: "${parsed.base}" -> ${basePrice}`);
+        logger.debug(`[PRICE] Found base price via parsing: "${parsed.base}" -> ${basePrice}`);
         // Add topping prices if any
         let totalPrice = basePrice;
         for (const topping of parsed.toppings) {
           const toppingPrice = priceList[topping] || 0;
           if (toppingPrice > 0) {
-            console.log(`🔍 [PRICE] Found topping price: "${topping}" -> ${toppingPrice}`);
+            logger.debug(`[PRICE] Found topping price: "${topping}" -> ${toppingPrice}`);
             totalPrice += toppingPrice;
           }
         }
@@ -221,10 +222,10 @@ export function getUnitPriceFromPriceList(itemName, priceList) {
     }
   } catch (error) {
     // Parsing failed, continue to return null
-    console.warn(`⚠️ [PRICE] Parsing failed for "${itemName}":`, error.message);
+    logger.warn(`[PRICE] Parsing failed for "${itemName}":`, error.message);
   }
   
-  console.warn(`⚠️ [PRICE] Not found for: "${normalizedItemName}" (original: "${itemName}")`);
+  logger.warn(`[PRICE] Not found for: "${normalizedItemName}" (original: "${itemName}")`);
   return null;
 }
 
@@ -236,7 +237,7 @@ export function calculateOrderTotal(items, priceList) {
   const itemDetails = [];
   
   for (const item of items) {
-    console.log(`🔍 [PRICE] Processing item: ${item.quantity}x ${item.name}`);
+    logger.debug(`[PRICE] Processing item: ${item.quantity}x ${item.name}`);
     
     // Use improved price lookup with normalization
     let unitPrice = getUnitPriceFromPriceList(item.name, priceList);
@@ -260,7 +261,7 @@ export function calculateOrderTotal(items, priceList) {
           toppingPrices = parsed.toppings.map(topping => {
             const toppingPrice = priceList[topping] || 0;
             if (toppingPrice > 0) {
-              console.log(`🔍 [PRICE] Found topping price: "${topping}" -> ${toppingPrice}`);
+              logger.debug(`[PRICE] Found topping price: "${topping}" -> ${toppingPrice}`);
             }
             return toppingPrice;
           });
@@ -385,7 +386,7 @@ export function normalizeDeliveryTime(timeStr) {
   // Format as HH:MM
   const formatted = `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`;
   
-  console.log(`✅ [NORMALIZE_DELIVERY_TIME] "${trimmed}" → "${formatted}"`);
+  logger.debug(`[NORMALIZE_DELIVERY_TIME] "${trimmed}" → "${formatted}"`);
   return formatted;
 }
 
@@ -405,7 +406,7 @@ function formatTime(timeStr) {
     return normalized || '-';
   } catch (error) {
     // If normalization fails (invalid format), return "-" instead of crashing
-    console.warn(`⚠️ [FORMAT_TIME] Failed to normalize delivery_time "${timeStr}":`, error.message);
+    logger.warn(`[FORMAT_TIME] Failed to normalize delivery_time "${timeStr}":`, error.message);
     return '-';
   }
 }
@@ -495,7 +496,7 @@ export function formatInvoice(order, priceList) {
       itemList += `${detail.quantity}x ${detail.name} - Rp${formatPrice(detail.itemTotal)}\n`;
     } else {
       itemList += `${detail.quantity}x ${detail.name} - Harga belum tersedia\n`;
-      console.warn(`⚠️ [INVOICE] Item "${detail.name}" has no price - showing "Harga belum tersedia"`);
+      logger.warn(`[INVOICE] Item "${detail.name}" has no price`);
     }
   });
   
@@ -582,7 +583,7 @@ export function separateItemsFromNotes(items, notes, priceList) {
           quantity: 1,
           name: priceListKey, // Use the exact name from price list
         });
-        console.log(`📦 Moved "${note}" from notes to items (exact match: "${priceListKey}")`);
+        logger.debug(`[ITEMS] Moved "${note}" from notes to items (exact match: "${priceListKey}")`);
         found = true;
         break;
       }
@@ -616,7 +617,7 @@ export function separateItemsFromNotes(items, notes, priceList) {
             quantity: 1,
             name: priceListKey,
           });
-          console.log(`📦 Moved "${note}" from notes to items (match: "${priceListKey}")`);
+          logger.debug(`[ITEMS] Moved "${note}" from notes to items (match: "${priceListKey}")`);
           found = true;
           break;
         }
@@ -626,7 +627,7 @@ export function separateItemsFromNotes(items, notes, priceList) {
     if (!found) {
       // Keep as note
       finalNotes.push(note);
-      console.log(`📝 Keeping "${note}" as note (not found in price list)`);
+      logger.debug(`[ITEMS] Keeping "${note}" as note (not found in price list)`);
     }
   }
   

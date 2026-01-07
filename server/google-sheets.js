@@ -5,6 +5,7 @@
 
 import { google } from 'googleapis';
 import dotenv from 'dotenv';
+import logger from './logger.js';
 
 dotenv.config();
 
@@ -35,7 +36,7 @@ const SPREADSHEET_ID = process.env.GOOGLE_SPREADSHEET_ID;
 
 // Validate Google Sheets configuration on module load
 if (!SPREADSHEET_ID) {
-  console.warn('⚠️  GOOGLE_SPREADSHEET_ID not set. Google Sheets features will not work.');
+  logger.warn('GOOGLE_SPREADSHEET_ID not set. Google Sheets features will not work.');
 }
 
 // Header map cache to reduce READ requests (fix 429 rate limit)
@@ -54,7 +55,7 @@ let adminChatIdsInflight = null; // Promise<number[]> (single-flight pattern)
  */
 export function invalidateHeaderCache(sheetName) {
   headerMapCache.delete(sheetName);
-  console.log(`🔄 [HEADER_CACHE] Invalidated cache for ${sheetName}`);
+  logger.debug(`[HEADER_CACHE] Invalidated cache for ${sheetName}`);
 }
 
 /**
@@ -97,7 +98,7 @@ async function retryWithBackoff(fn, maxAttempts = 5) {
       const retryAfter = error.response?.headers?.['retry-after'];
       const finalDelay = retryAfter ? parseInt(retryAfter) * 1000 : totalDelay;
       
-      console.warn(`⚠️ [RETRY] Rate limit (429) on attempt ${attempt}/${maxAttempts}, waiting ${Math.round(finalDelay)}ms before retry...`);
+      logger.warn(`[RETRY] Rate limit (429) on attempt ${attempt}/${maxAttempts}, waiting ${Math.round(finalDelay)}ms`);
       await new Promise(resolve => setTimeout(resolve, finalDelay));
     }
   }
@@ -304,7 +305,7 @@ export async function getSheetHeaderMap(sheetName, options = {}) {
           if (normalized) {
             // If duplicate, first occurrence wins (log warning)
             if (headerTextMap[normalized] !== undefined) {
-              console.warn(`⚠️ [HEADER_MAP] Duplicate header "${normalized}" at index ${index}, using first occurrence at ${headerTextMap[normalized]}`);
+              logger.warn(`[HEADER_MAP] Duplicate header "${normalized}" at index ${index}, using first occurrence`);
             } else {
               headerTextMap[normalized] = index;
             }
@@ -321,9 +322,7 @@ export async function getSheetHeaderMap(sheetName, options = {}) {
         
         // Log legacy columns if found
         if (legacyColumns.length > 0) {
-          console.warn(`⚠️ [HEADER_MAP] Legacy Title Case columns detected in ${sheetName}:`, 
-            legacyColumns.map(c => `${c.letter}: "${c.name}"`).join(', '));
-          console.warn(`⚠️ [HEADER_MAP] These columns will be IGNORED. Use snake_case columns instead.`);
+          logger.warn(`[HEADER_MAP] Legacy Title Case columns detected in ${sheetName}, will be ignored`);
         }
         
         // Map internal keys to column indices using aliases
@@ -344,8 +343,7 @@ export async function getSheetHeaderMap(sheetName, options = {}) {
               if (isLegacyTitleCaseColumn(normalizedAlias)) {
                 // This should never happen now since we removed Title Case from aliases,
                 // but add a safety check
-                console.error(`❌ [HEADER_MAP] Attempted to map legacy Title Case column "${alias}" for ${internalKey}`);
-                console.error(`❌ [HEADER_MAP] This is not allowed. snake_case columns must be used.`);
+                logger.error(`[HEADER_MAP] Attempted to map legacy Title Case column "${alias}" for ${internalKey}`);
                 throw new Error(`Cannot use legacy Title Case column "${alias}" for ${internalKey}. Use snake_case column instead.`);
               }
               
@@ -366,7 +364,7 @@ export async function getSheetHeaderMap(sheetName, options = {}) {
           } else {
             // Log successful mapping for pricing/payment fields
             if (REQUIRED_SNAKE_CASE_COLUMNS.includes(internalKey)) {
-              console.log(`✅ [HEADER_MAP] Mapped ${internalKey} → column "${foundColumnName}"`);
+              logger.debug(`[HEADER_MAP] Mapped ${internalKey} → column "${foundColumnName}"`);
             }
           }
         }
@@ -406,19 +404,18 @@ export async function getSheetHeaderMap(sheetName, options = {}) {
           const errorMsg = `Missing required snake_case columns in ${sheetName}: ${missingSnakeCaseKeys.join(', ')}. ` +
             `These columns are mandatory and must use snake_case format (e.g., "product_total", not "Product Total"). ` +
             `Available headers: ${Object.keys(headerTextMap).join(', ')}`;
-          console.error(`❌ [HEADER_MAP] ${errorMsg}`);
+          logger.error(`[HEADER_MAP] ${errorMsg}`);
           throw new Error(errorMsg);
         }
         
         if (missingKeys.length > 0 && missingSnakeCaseKeys.length === 0) {
           // Only warn about non-critical missing keys
-          console.warn(`⚠️ [HEADER_MAP] Missing optional keys in ${sheetName}:`, missingKeys);
-          console.warn(`⚠️ [HEADER_MAP] Available headers:`, Object.keys(headerTextMap));
+          logger.warn(`[HEADER_MAP] Missing optional keys in ${sheetName}: ${missingKeys.join(', ')}`);
         }
         
         // Log schema enforcement message once per sheet
         if (requireSnakeCase && sheetType === 'Orders') {
-          console.log(`✅ [SCHEMA] Enforcing snake_case-only columns for ${sheetName}`);
+          logger.debug(`[SCHEMA] Enforcing snake_case-only columns for ${sheetName}`);
         }
         
         const result = {
@@ -447,7 +444,7 @@ export async function getSheetHeaderMap(sheetName, options = {}) {
     
     return await fetchPromise;
   } catch (error) {
-    console.error(`❌ [HEADER_MAP] Error reading headers from ${sheetName}:`, error.message);
+    logger.error(`[HEADER_MAP] Error reading headers from ${sheetName}:`, error.message);
     if (error.isRateLimit) {
       // User-friendly rate limit error
       throw error;
@@ -576,7 +573,7 @@ export async function initializeStorage() {
       throw new Error('GOOGLE_SPREADSHEET_ID is not set in environment variables');
     }
     
-    console.log(`🔍 [INIT] Checking spreadsheet: ${SPREADSHEET_ID}`);
+    logger.debug(`[INIT] Checking spreadsheet: ${SPREADSHEET_ID}`);
     
     // Check if spreadsheet exists and create sheets if needed
     // Add timeout wrapper to prevent hanging
@@ -591,14 +588,14 @@ export async function initializeStorage() {
     const spreadsheet = await Promise.race([getSpreadsheetPromise, timeoutPromise]);
 
     const existingSheets = spreadsheet.data.sheets.map(s => s.properties.title);
-    console.log(`🔍 [INIT] Found ${existingSheets.length} existing sheet(s): ${existingSheets.join(', ')}`);
+    logger.debug(`[INIT] Found ${existingSheets.length} existing sheet(s)`);
 
     // Track which sheets were just created
     let messagesSheetCreated = false;
     let conversationsSheetCreated = false;
 
     // Create Messages sheet if it doesn't exist
-    console.log(`🔍 [INIT] Checking Messages sheet...`);
+    logger.debug(`[INIT] Checking Messages sheet...`);
     if (!existingSheets.includes(MESSAGES_SHEET)) {
       await sheets.spreadsheets.batchUpdate({
         spreadsheetId: SPREADSHEET_ID,
@@ -616,12 +613,12 @@ export async function initializeStorage() {
     }
 
     // Initialize Messages sheet headers (idempotent - safe to call multiple times)
-    console.log(`🔍 [INIT] Ensuring Messages sheet headers...`);
+    logger.debug(`[INIT] Ensuring Messages sheet headers...`);
     await ensureMessagesHeaders();
-    console.log(`✅ [INIT] Messages sheet headers ready`);
+    logger.debug(`[INIT] Messages sheet headers ready`);
 
     // Create Conversations sheet if it doesn't exist
-    console.log(`🔍 [INIT] Checking Conversations sheet...`);
+    logger.debug(`[INIT] Checking Conversations sheet...`);
     if (!existingSheets.includes(CONVERSATIONS_SHEET)) {
       await sheets.spreadsheets.batchUpdate({
         spreadsheetId: SPREADSHEET_ID,
@@ -639,58 +636,52 @@ export async function initializeStorage() {
     }
 
     // Initialize Conversations sheet headers (idempotent - safe to call multiple times)
-    console.log(`🔍 [INIT] Ensuring Conversations sheet headers...`);
+    logger.debug(`[INIT] Ensuring Conversations sheet headers...`);
     await ensureConversationsHeaders();
-    console.log(`✅ [INIT] Conversations sheet headers ready`);
+    logger.debug(`[INIT] Conversations sheet headers ready`);
 
     // Initialize price list
-    console.log(`🔍 [INIT] Initializing price list...`);
+    logger.debug(`[INIT] Initializing price list...`);
     try {
       await initializePriceList();
     } catch (error) {
-      console.error('⚠️  Error initializing price list:', error.message);
+      logger.error('Error initializing price list:', error.message);
       // Don't throw - continue without price list
     }
 
     // Initialize waiting list
-    console.log(`🔍 [INIT] Initializing waiting list...`);
+    logger.debug(`[INIT] Initializing waiting list...`);
     try {
       await initializeWaitingList();
-      console.log(`✅ [INIT] Waiting list ready`);
+      logger.debug(`[INIT] Waiting list ready`);
     } catch (error) {
-      console.error('⚠️  Error initializing waiting list:', error.message);
+      logger.error('Error initializing waiting list:', error.message);
       // Don't throw - continue without waiting list
     }
 
     // Initialize Users sheet
-    console.log(`🔍 [INIT] Initializing Users sheet...`);
+    logger.debug(`[INIT] Initializing Users sheet...`);
     try {
       await ensureUsersSheet();
-      console.log(`✅ [INIT] Users sheet ready`);
+      logger.debug(`[INIT] Users sheet ready`);
     } catch (error) {
-      console.error('⚠️  Error initializing Users sheet:', error.message);
+      logger.error('Error initializing Users sheet:', error.message);
       // Don't throw - continue without Users sheet
     }
 
-    console.log('✅ Google Sheets initialized');
-    console.log(`   Spreadsheet: https://docs.google.com/spreadsheets/d/${SPREADSHEET_ID}`);
+    logger.info('Google Sheets initialized');
   } catch (error) {
-    console.error('❌ Error initializing Google Sheets:', error.message);
-    console.error('❌ [INIT] Stack:', error.stack);
+    logger.error('Error initializing Google Sheets:', error.message);
     
     // Provide helpful error messages
     if (error.message.includes('timed out')) {
-      console.error('⚠️  [INIT] Google Sheets API timed out. Check:');
-      console.error('   1. Internet connection');
-      console.error('   2. Google Service Account credentials');
-      console.error('   3. Spreadsheet ID is correct');
-      console.error('   4. Service account has access to the spreadsheet');
+      logger.error('[INIT] Google Sheets API timed out. Check connection and credentials.');
     } else if (error.message.includes('not set')) {
-      console.error('⚠️  [INIT] Missing required environment variable');
+      logger.error('[INIT] Missing required environment variable');
     } else if (error.message.includes('404') || error.message.includes('not found')) {
-      console.error('⚠️  [INIT] Spreadsheet not found. Check GOOGLE_SPREADSHEET_ID');
+      logger.error('[INIT] Spreadsheet not found. Check GOOGLE_SPREADSHEET_ID');
     } else if (error.message.includes('403') || error.message.includes('permission')) {
-      console.error('⚠️  [INIT] Permission denied. Ensure service account has access to the spreadsheet');
+      logger.error('[INIT] Permission denied. Ensure service account has access');
     }
     
     throw error;
@@ -743,7 +734,7 @@ async function ensureMessagesHeaders() {
     }
 
     // Headers are missing or incorrect - need to fix
-    console.log('🔄 Fixing Messages sheet headers...');
+    logger.debug('Fixing Messages sheet headers...');
 
     // Get all existing data (if any)
     const allDataResponse = await sheets.spreadsheets.values.get({
