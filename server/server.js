@@ -455,14 +455,6 @@ async function handleTelegramMessage(message) {
   const userId = message.from?.id;
   const userName = message.from?.first_name || message.from?.username || 'Unknown';
   const messageText = message.text || '';
-  
-    from: userName,
-    userId: userId,
-    chatId: chatId,
-    chatType: chatType,
-    text: messageText.substring(0, 100) || '',
-    messageId: message.message_id,
-  });
 
   // Group/Supergroup message gating (privacy mode)
   // In groups, bot can only receive command messages reliably
