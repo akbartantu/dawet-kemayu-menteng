@@ -3,9 +3,8 @@
  * Calculates order totals from parsed items using price list
  */
 
-import { daysUntilDelivery } from './date-utils.js';
+import { daysUntilDelivery, getDaysDiffJakarta } from './date-utils.js';
 import { calculateMinDP } from './payment-tracker.js';
-import logger from './logger.js';
 
 /**
  * Parse item name to extract base item and toppings
@@ -156,13 +155,11 @@ export function getUnitPriceFromPriceList(itemName, priceList) {
   }
   
   const normalizedItemName = normalizeProductName(itemName);
-  logger.debug(`[PRICE] Looking up price for item: "${itemName}"`);
   
   // Strategy A: Exact match on normalized name
   for (const [priceListKey, price] of Object.entries(priceList)) {
     const normalizedKey = normalizeProductName(priceListKey);
     if (normalizedKey === normalizedItemName) {
-      logger.debug(`[PRICE] Exact match found: "${priceListKey}" -> ${price}`);
       return price;
     }
   }
@@ -195,7 +192,6 @@ export function getUnitPriceFromPriceList(itemName, priceList) {
       }
       
       if (matches && normalizedKey.includes('dawet')) {
-        logger.debug(`[PRICE] Fuzzy match found: "${priceListKey}" -> ${price}`);
         return price;
       }
     }
@@ -207,13 +203,11 @@ export function getUnitPriceFromPriceList(itemName, priceList) {
     if (parsed.base) {
       const basePrice = priceList[parsed.base] || null;
       if (basePrice) {
-        logger.debug(`[PRICE] Found base price via parsing: "${parsed.base}" -> ${basePrice}`);
         // Add topping prices if any
         let totalPrice = basePrice;
         for (const topping of parsed.toppings) {
           const toppingPrice = priceList[topping] || 0;
           if (toppingPrice > 0) {
-            logger.debug(`[PRICE] Found topping price: "${topping}" -> ${toppingPrice}`);
             totalPrice += toppingPrice;
           }
         }
@@ -222,10 +216,10 @@ export function getUnitPriceFromPriceList(itemName, priceList) {
     }
   } catch (error) {
     // Parsing failed, continue to return null
-    logger.warn(`[PRICE] Parsing failed for "${itemName}":`, error.message);
+    console.warn(`⚠️ [PRICE] Parsing failed for "${itemName}":`, error.message);
   }
   
-  logger.warn(`[PRICE] Not found for: "${normalizedItemName}" (original: "${itemName}")`);
+  console.warn(`⚠️ [PRICE] Not found for: "${normalizedItemName}" (original: "${itemName}")`);
   return null;
 }
 
@@ -237,8 +231,6 @@ export function calculateOrderTotal(items, priceList) {
   const itemDetails = [];
   
   for (const item of items) {
-    logger.debug(`[PRICE] Processing item: ${item.quantity}x ${item.name}`);
-    
     // Use improved price lookup with normalization
     let unitPrice = getUnitPriceFromPriceList(item.name, priceList);
     let parsed = null;
@@ -261,7 +253,6 @@ export function calculateOrderTotal(items, priceList) {
           toppingPrices = parsed.toppings.map(topping => {
             const toppingPrice = priceList[topping] || 0;
             if (toppingPrice > 0) {
-              logger.debug(`[PRICE] Found topping price: "${topping}" -> ${toppingPrice}`);
             }
             return toppingPrice;
           });
@@ -277,7 +268,6 @@ export function calculateOrderTotal(items, priceList) {
     let itemTotal = 0;
     if (unitPrice !== null && unitPrice > 0) {
       itemTotal = unitPrice * item.quantity;
-      console.log(`✅ [PRICE] Item: ${item.quantity}x ${item.name} - Unit: ${unitPrice}, Total: ${itemTotal}`);
     } else {
       console.warn(`⚠️ [PRICE] Price not found for item: "${item.name}" - will show "Harga belum tersedia"`);
     }
@@ -385,8 +375,6 @@ export function normalizeDeliveryTime(timeStr) {
   
   // Format as HH:MM
   const formatted = `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`;
-  
-  logger.debug(`[NORMALIZE_DELIVERY_TIME] "${trimmed}" → "${formatted}"`);
   return formatted;
 }
 
@@ -406,7 +394,7 @@ function formatTime(timeStr) {
     return normalized || '-';
   } catch (error) {
     // If normalization fails (invalid format), return "-" instead of crashing
-    logger.warn(`[FORMAT_TIME] Failed to normalize delivery_time "${timeStr}":`, error.message);
+    console.warn(`⚠️ [FORMAT_TIME] Failed to normalize delivery_time "${timeStr}":`, error.message);
     return '-';
   }
 }
@@ -414,7 +402,38 @@ function formatTime(timeStr) {
 /**
  * Format invoice message
  */
-export function formatInvoice(order, priceList) {
+
+/**
+ * Generate recap message with H-4 threshold logic
+ * @param {Object} order - Order object
+ * @param {Object} priceList - Price list
+ * @param {Object} options - Options: { todayDateOverride?: Date }
+ * @returns {string} Formatted invoice/recap message
+ */
+export function formatInvoice(order, priceList, options = {}) {
+  const { todayDateOverride } = options;
+  
+  // Calculate days difference to determine template
+  let daysDiff = null;
+  if (order.event_date) {
+    daysDiff = getDaysDiffJakarta(order.event_date, todayDateOverride);
+  }
+  
+  // Choose template: FULL PAYMENT if days_diff < 4, DP if days_diff >= 4
+  const useFullPaymentFormat = daysDiff !== null && daysDiff < 4;
+  
+  if (useFullPaymentFormat) {
+    return formatFullPaymentRecap(order, priceList);
+  } else {
+    return formatDPRecap(order, priceList);
+  }
+}
+
+/**
+ * Format FULL PAYMENT recap (for orders within H-4)
+ * No DP section, only one note line
+ */
+function formatFullPaymentRecap(order, priceList) {
   const calculation = calculateOrderTotal(order.items, priceList);
   
   // Helper to format empty fields as "-"
@@ -423,7 +442,7 @@ export function formatInvoice(order, priceList) {
   // Get invoice number (order ID)
   const invoiceNumber = order.id || 'N/A';
   
-  // Get customer info (map customer_name to both nama_pemesan and nama_penerima if receiver_name not available)
+  // Get customer info
   const namaPemesan = order.customer_name || '-';
   const namaPenerima = order.receiver_name || order.customer_name || '-';
   const noHp = formatField(order.phone_number);
@@ -437,17 +456,17 @@ export function formatInvoice(order, priceList) {
   // Calculate totals
   const subtotal = calculation.subtotal;
   
-  // Use packaging_fee from order (already calculated based on total cups)
-  // If not available, calculate from items as fallback
+  // Use packaging_fee from order and calculate packaging boxes
   let packagingPrice = 0;
   let packagingFound = false;
+  let packagingBoxes = 0;
   
   if (order.packaging_fee !== undefined && order.packaging_fee !== null) {
-    // Use stored packaging_fee (calculated correctly based on cups)
     packagingPrice = parseFloat(order.packaging_fee) || 0;
     packagingFound = packagingPrice > 0;
+    // Calculate boxes from price (1 box = 40,000)
+    packagingBoxes = packagingFound ? Math.ceil(packagingPrice / 40000) : 0;
   } else {
-    // Fallback: Check for packaging in items (legacy support)
     const packagingItem = calculation.itemDetails.find(detail => 
       detail.name.toLowerCase().includes('packaging') || 
       detail.name.toLowerCase().includes('styrofoam')
@@ -455,15 +474,30 @@ export function formatInvoice(order, priceList) {
     if (packagingItem) {
       packagingPrice = packagingItem.itemTotal;
       packagingFound = true;
+      packagingBoxes = packagingItem.quantity || Math.ceil(packagingPrice / 40000);
     }
   }
   
-  // Parse delivery_fee (canonical field from Google Sheets)
-  // Also check delivery_fee_source for display logic
+  // If packaging found but boxes not calculated, calculate from total cups
+  if (packagingFound && packagingBoxes === 0) {
+    let totalCups = 0;
+    (order.items || []).forEach(item => {
+      const itemName = (item.name || '').toLowerCase();
+      if (itemName.includes('packaging') || itemName.includes('styrofoam')) {
+        return; // Skip packaging items
+      }
+      if (itemName.includes('dawet') && 
+          (itemName.includes('small') || itemName.includes('medium') || itemName.includes('large')) &&
+          !itemName.includes('botol')) {
+        totalCups += parseInt(item.quantity || 0);
+      }
+    });
+    packagingBoxes = totalCups > 0 ? Math.ceil(totalCups / 50) : 1;
+  }
+  
+  // Parse delivery_fee
   let shippingPrice = 0;
   const deliveryFeeSource = order.delivery_fee_source || 'NOT_PROVIDED';
-  
-  // Use delivery_fee (canonical field)
   const rawDeliveryFee = order.delivery_fee;
   
   if (rawDeliveryFee !== undefined && rawDeliveryFee !== null && rawDeliveryFee !== '') {
@@ -472,31 +506,23 @@ export function formatInvoice(order, priceList) {
       shippingPrice = parsedFee;
     }
   }
-  
-  // Store source for display logic
   order._delivery_fee_source = deliveryFeeSource;
-  // Use total_amount (canonical) with fallback to final_total (legacy) or calculated
   const totalAmount = order.total_amount || order.final_total || subtotal + packagingPrice + shippingPrice;
-  const dpMinimum = calculateMinDP(totalAmount);
-  
-  // Get shipping method (delivery_method is the canonical field)
-  const metodePengiriman = order.delivery_method || order.shipping_method || '-';
-  
-  // Build item list with prices (exclude packaging if found)
+  // Use delivery_method (stored in Orders.delivery_method) with fallback for backward compatibility
+  const pengiriman = order.delivery_method || order.shipping_method || '-';
+  // Build item list
   let itemList = '';
   calculation.itemDetails.forEach((detail) => {
-    // Skip packaging if we're showing it separately
     if (packagingFound && (detail.name.toLowerCase().includes('packaging') || 
         detail.name.toLowerCase().includes('styrofoam'))) {
       return;
     }
     
-    // Show price or "Harga belum tersedia" if price not found
     if (detail.priceFound && detail.itemTotal > 0) {
-      itemList += `${detail.quantity}x ${detail.name} - Rp${formatPrice(detail.itemTotal)}\n`;
+      itemList += `${detail.quantity}x ${detail.name}: Rp${formatPrice(detail.itemTotal)}\n`;
     } else {
-      itemList += `${detail.quantity}x ${detail.name} - Harga belum tersedia\n`;
-      logger.warn(`[INVOICE] Item "${detail.name}" has no price`);
+      itemList += `${detail.quantity}x ${detail.name}: Harga belum tersedia\n`;
+      console.warn(`⚠️ [INVOICE] Item "${detail.name}" has no price - showing "Harga belum tersedia"`);
     }
   });
   
@@ -504,7 +530,7 @@ export function formatInvoice(order, priceList) {
     itemList = '-';
   }
   
-  // Build invoice
+  // Build FULL PAYMENT invoice (no DP section)
   let invoice = `🧾 REKAP PESANAN & PEMBAYARAN\n`;
   invoice += `Dawet Kemayu Menteng 🌿\n\n`;
   invoice += `Nomor Invoice:\n${invoiceNumber}\n\n`;
@@ -520,23 +546,173 @@ export function formatInvoice(order, priceList) {
   invoice += `Tanggal Event: ${tanggalEvent}\n`;
   invoice += `Waktu Kirim: ${waktuKirim}\n\n`;
   invoice += `--------------------------------\n`;
-  invoice += `Pesanan:\n${itemList}\n`;
+  invoice += `Pesanan:\n${itemList}`;
   
-  if (packagingFound) {
-    invoice += `Packaging Styrofoam: Rp${formatPrice(packagingPrice)}\n`;
-  } else {
-    invoice += `Packaging Styrofoam: -\n`;
+  if (packagingFound && packagingBoxes > 0) {
+    invoice += `${packagingBoxes}x Packaging Styrofoam: Rp${formatPrice(packagingPrice)}\n`;
   }
   
-  invoice += `Pengiriman: ${metodePengiriman}\n`;
+  // Display delivery_method (never "-" if provided)
+  const displayPengiriman = pengiriman && pengiriman !== '-' ? pengiriman : '-';
+  invoice += `\nPengiriman: ${displayPengiriman}\n`;
   
-  // Display Ongkir based on delivery_fee value and source (use existing deliveryFeeSource variable)
   if (shippingPrice > 0) {
     invoice += `Ongkir: Rp${formatPrice(shippingPrice)}\n\n`;
   } else if (deliveryFeeSource === 'NOT_PROVIDED') {
     invoice += `Ongkir: -\n\n`;
   } else {
-    // USER_EMPTY or other case where user provided but value is 0
+    invoice += `Ongkir: Rp0\n\n`;
+  }
+  invoice += `--------------------------------\n`;
+  invoice += `TOTAL PEMBAYARAN:\n`;
+  invoice += `Rp${formatPrice(totalAmount)}\n\n`;
+  invoice += `--------------------------------\n`;
+  invoice += `🏦 PEMBAYARAN TRANSFER BANK\n`;
+  invoice += `Bank Jago\n`;
+  invoice += `No. Rekening: 102730840011\n`;
+  invoice += `a.n. Septina Eka Kartika Dewi\n\n`;
+  invoice += `--------------------------------\n`;
+  invoice += `Catatan:\n`;
+  invoice += `• Silahkan lakukan pembayaran penuh untuk melanjutkan proses pesanan Anda\n\n`;
+  invoice += `--------------------------------\n`;
+  invoice += `Terima kasih atas kepercayaan Anda!`;
+  
+  return invoice;
+}
+
+/**
+ * Format DP recap (for orders farther than H-4)
+ * Includes DP section and pelunasan rules
+ */
+function formatDPRecap(order, priceList) {
+  const calculation = calculateOrderTotal(order.items, priceList);
+  
+  // Helper to format empty fields as "-"
+  const formatField = (value) => value || '-';
+  
+  // Get invoice number (order ID)
+  const invoiceNumber = order.id || 'N/A';
+  
+  // Get customer info
+  const namaPemesan = order.customer_name || '-';
+  const namaPenerima = order.receiver_name || order.customer_name || '-';
+  const noHp = formatField(order.phone_number);
+  const alamat = formatField(order.address);
+  
+  // Get event info
+  const namaEvent = formatField(order.event_name);
+  const tanggalEvent = formatField(order.event_date);
+  const waktuKirim = formatTime(order.delivery_time);
+  
+  // Calculate totals
+  const subtotal = calculation.subtotal;
+  
+  // Use packaging_fee from order and calculate packaging boxes
+  let packagingPrice = 0;
+  let packagingFound = false;
+  let packagingBoxes = 0;
+  
+  if (order.packaging_fee !== undefined && order.packaging_fee !== null) {
+    packagingPrice = parseFloat(order.packaging_fee) || 0;
+    packagingFound = packagingPrice > 0;
+    // Calculate boxes from price (1 box = 40,000)
+    packagingBoxes = packagingFound ? Math.ceil(packagingPrice / 40000) : 0;
+  } else {
+    const packagingItem = calculation.itemDetails.find(detail => 
+      detail.name.toLowerCase().includes('packaging') || 
+      detail.name.toLowerCase().includes('styrofoam')
+    );
+    if (packagingItem) {
+      packagingPrice = packagingItem.itemTotal;
+      packagingFound = true;
+      packagingBoxes = packagingItem.quantity || Math.ceil(packagingPrice / 40000);
+    }
+  }
+  
+  // If packaging found but boxes not calculated, calculate from total cups
+  if (packagingFound && packagingBoxes === 0) {
+    let totalCups = 0;
+    (order.items || []).forEach(item => {
+      const itemName = (item.name || '').toLowerCase();
+      if (itemName.includes('packaging') || itemName.includes('styrofoam')) {
+        return; // Skip packaging items
+      }
+      if (itemName.includes('dawet') && 
+          (itemName.includes('small') || itemName.includes('medium') || itemName.includes('large')) &&
+          !itemName.includes('botol')) {
+        totalCups += parseInt(item.quantity || 0);
+      }
+    });
+    packagingBoxes = totalCups > 0 ? Math.ceil(totalCups / 50) : 1;
+  }
+  
+  // Parse delivery_fee
+  let shippingPrice = 0;
+  const deliveryFeeSource = order.delivery_fee_source || 'NOT_PROVIDED';
+  const rawDeliveryFee = order.delivery_fee;
+  
+  if (rawDeliveryFee !== undefined && rawDeliveryFee !== null && rawDeliveryFee !== '') {
+    const parsedFee = typeof rawDeliveryFee === 'number' ? rawDeliveryFee : parseFloat(rawDeliveryFee);
+    if (!isNaN(parsedFee) && parsedFee >= 0) {
+      shippingPrice = parsedFee;
+    }
+  }
+  order._delivery_fee_source = deliveryFeeSource;
+  const totalAmount = order.total_amount || order.final_total || subtotal + packagingPrice + shippingPrice;
+  const dpMinimum = calculateMinDP(totalAmount);
+  // Use delivery_method (stored in Orders.delivery_method) with fallback for backward compatibility
+  const pengiriman = order.delivery_method || order.shipping_method || '-';
+  // Build item list
+  let itemList = '';
+  calculation.itemDetails.forEach((detail) => {
+    if (packagingFound && (detail.name.toLowerCase().includes('packaging') || 
+        detail.name.toLowerCase().includes('styrofoam'))) {
+      return;
+    }
+    
+    if (detail.priceFound && detail.itemTotal > 0) {
+      itemList += `${detail.quantity}x ${detail.name}: Rp${formatPrice(detail.itemTotal)}\n`;
+    } else {
+      itemList += `${detail.quantity}x ${detail.name}: Harga belum tersedia\n`;
+      console.warn(`⚠️ [INVOICE] Item "${detail.name}" has no price - showing "Harga belum tersedia"`);
+    }
+  });
+  
+  if (!itemList.trim()) {
+    itemList = '-';
+  }
+  
+  // Build DP invoice (with DP section)
+  let invoice = `🧾 REKAP PESANAN & PEMBAYARAN\n`;
+  invoice += `Dawet Kemayu Menteng 🌿\n\n`;
+  invoice += `Nomor Invoice:\n${invoiceNumber}\n\n`;
+  invoice += `--------------------------------\n`;
+  invoice += `👤 INFORMASI PEMESAN\n`;
+  invoice += `Nama Pemesan: ${namaPemesan}\n`;
+  invoice += `Nama Penerima: ${namaPenerima}\n`;
+  invoice += `No HP Penerima: ${noHp}\n`;
+  invoice += `Alamat Pengiriman:\n${alamat}\n\n`;
+  invoice += `--------------------------------\n`;
+  invoice += `🎉 DETAIL EVENT\n`;
+  invoice += `Nama Event: ${namaEvent}\n`;
+  invoice += `Tanggal Event: ${tanggalEvent}\n`;
+  invoice += `Waktu Kirim: ${waktuKirim}\n\n`;
+  invoice += `--------------------------------\n`;
+  invoice += `Pesanan:\n${itemList}`;
+  
+  if (packagingFound && packagingBoxes > 0) {
+    invoice += `${packagingBoxes}x Packaging Styrofoam: Rp${formatPrice(packagingPrice)}\n`;
+  }
+  
+  // Display delivery_method (never "-" if provided)
+  const displayPengiriman = pengiriman && pengiriman !== '-' ? pengiriman : '-';
+  invoice += `\nPengiriman: ${displayPengiriman}\n`;
+  
+  if (shippingPrice > 0) {
+    invoice += `Ongkir: Rp${formatPrice(shippingPrice)}\n\n`;
+  } else if (deliveryFeeSource === 'NOT_PROVIDED') {
+    invoice += `Ongkir: -\n\n`;
+  } else {
     invoice += `Ongkir: Rp0\n\n`;
   }
   invoice += `--------------------------------\n`;
@@ -583,7 +759,6 @@ export function separateItemsFromNotes(items, notes, priceList) {
           quantity: 1,
           name: priceListKey, // Use the exact name from price list
         });
-        logger.debug(`[ITEMS] Moved "${note}" from notes to items (exact match: "${priceListKey}")`);
         found = true;
         break;
       }
@@ -617,7 +792,6 @@ export function separateItemsFromNotes(items, notes, priceList) {
             quantity: 1,
             name: priceListKey,
           });
-          logger.debug(`[ITEMS] Moved "${note}" from notes to items (match: "${priceListKey}")`);
           found = true;
           break;
         }
@@ -627,7 +801,6 @@ export function separateItemsFromNotes(items, notes, priceList) {
     if (!found) {
       // Keep as note
       finalNotes.push(note);
-      logger.debug(`[ITEMS] Keeping "${note}" as note (not found in price list)`);
     }
   }
   
@@ -726,9 +899,9 @@ function formatDownPaymentMessage(order, totalAmount, downPayment, daysUntil) {
   // Escape user-provided data to prevent markdown parsing errors
   const orderId = escapeMarkdownText(order.id || 'N/A');
   const customerName = escapeMarkdownText(order.customer_name || 'N/A');
-  const eventDate = escapeMarkdownText(order.event_date || '-');
+  // Do NOT escape date - dates in YYYY-MM-DD format are safe in Telegram Markdown
+  const eventDate = order.event_date || '-';
   const deliveryTime = formatTime(order.delivery_time);
-  
   let message = `💰 **PEMBAYARAN DP (Down Payment)**\n\n`;
   message += `📋 **Order ID:** ${orderId}\n`;
   message += `👤 **Customer:** ${customerName}\n`;
@@ -753,9 +926,9 @@ function formatFullPaymentMessage(order, totalAmount, daysUntil = null) {
   // Escape user-provided data to prevent markdown parsing errors
   const orderId = escapeMarkdownText(order.id || 'N/A');
   const customerName = escapeMarkdownText(order.customer_name || 'N/A');
-  const eventDate = escapeMarkdownText(order.event_date || '-');
+  // Do NOT escape date - dates in YYYY-MM-DD format are safe in Telegram Markdown
+  const eventDate = order.event_date || '-';
   const deliveryTime = formatTime(order.delivery_time);
-  
   let message = `💰 **PEMBAYARAN PENUH**\n\n`;
   message += `📋 **Order ID:** ${orderId}\n`;
   message += `👤 **Customer:** ${customerName}\n`;

@@ -4,7 +4,6 @@
  * Implements PRD Admin Assistant requirements
  */
 
-import logger from './logger.js';
 import { 
   getAllOrders, 
   getOrderById, 
@@ -36,6 +35,7 @@ import {
   addDaysJakarta, 
   toISODateJakarta 
 } from './date-utils.js';
+import logger from './logger.js';
 
 /**
  * Handle /admin_auth command - Bootstrap admin using setup code
@@ -85,8 +85,6 @@ export async function handleAdminAuth(chatId, userId, messageText, sendMessage) 
       '• /payment_status <ORDER_ID>\n' +
       '• /today_reminder'
     );
-    
-    logger.debug(`✅ Admin access granted to user ${userId} via /admin_auth`);
   } catch (error) {
     console.error('❌ Error in handleAdminAuth:', error);
     await sendMessage(chatId, '❌ Terjadi kesalahan saat memberikan akses admin. Silakan coba lagi.');
@@ -101,7 +99,6 @@ export async function handleAdminAuth(chatId, userId, messageText, sendMessage) 
  */
 export async function isAdmin(telegramUserId) {
   if (!telegramUserId) {
-    logger.warn('[ADMIN_CHECK] No userId provided');
     return false;
   }
   
@@ -109,7 +106,6 @@ export async function isAdmin(telegramUserId) {
   const userIdString = String(telegramUserId);
   const userIdNumber = typeof telegramUserId === 'number' ? telegramUserId : parseInt(userIdString);
   
-  logger.debug(`[ADMIN_CHECK] Checking admin status - userId: ${telegramUserId}`);
   
   try {
     // First check Users sheet - try both string and number formats
@@ -119,11 +115,7 @@ export async function isAdmin(telegramUserId) {
     if (!role || role === 'customer') {
       role = await getUserRole('telegram', String(userIdNumber));
     }
-    
-    logger.debug(`[ADMIN_CHECK] Users sheet lookup - role: ${role || 'not found'}`);
-    
     if (role === 'admin') {
-      logger.debug(`[ADMIN_CHECK] User ${telegramUserId} is admin (from Users sheet)`);
       return true;
     }
     
@@ -134,14 +126,13 @@ export async function isAdmin(telegramUserId) {
     
     const isEnvAdmin = adminIds.includes(userIdNumber);
     if (isEnvAdmin) {
-      logger.debug(`[ADMIN_CHECK] User ${telegramUserId} is admin (from env var)`);
       return true;
     }
     
-    logger.debug(`[ADMIN_CHECK] User ${telegramUserId} is NOT admin (role: ${role || 'customer'})`);
     return false;
   } catch (error) {
-    logger.error('[ADMIN_CHECK] Error checking admin status:', error);
+    console.error('❌ [ADMIN_CHECK] Error checking admin status:', error);
+    console.error('❌ [ADMIN_CHECK] Stack:', error.stack);
     
     // Fallback to env var on error
     const adminIds = process.env.ADMIN_TELEGRAM_USER_IDS 
@@ -150,7 +141,6 @@ export async function isAdmin(telegramUserId) {
     
     const isEnvAdmin = adminIds.includes(userIdNumber);
     if (isEnvAdmin) {
-      logger.debug(`[ADMIN_CHECK] User ${telegramUserId} is admin (from env var fallback)`);
       return true;
     }
     
@@ -212,13 +202,11 @@ export async function handleParseOrder(chatId, userId, messageText, sendMessage,
     // Prefer reply_to_message if available
     if (replyToMessage && replyToMessage.text) {
       orderText = replyToMessage.text.trim();
-      console.log(`🔍 [PARSE_ORDER] Using reply_to_message text (${orderText.length} chars)`);
     } else {
       // Extract payload from same message (everything after first newline or after command)
       const newlineIndex = messageText.indexOf('\n');
       if (newlineIndex >= 0) {
         orderText = messageText.substring(newlineIndex + 1).trim();
-        console.log(`🔍 [PARSE_ORDER] Using payload from same message (${orderText.length} chars)`);
       } else {
         // Fallback: Remove /parse_order command from message
         orderText = messageText.replace(/^\/parse_order\s*/i, '').trim();
@@ -252,8 +240,40 @@ export async function handleParseOrder(chatId, userId, messageText, sendMessage,
       return;
     }
 
-    // Generate order ID
-    const orderId = await generateOrderId();
+    // Check if this is an edit (order ID in form)
+    // Look for "Invoice:" field or order ID pattern in the message (DKM/YYYYMMDD/000001)
+    let orderId = null;
+    let isEdit = false;
+    
+    // Try to extract Invoice from form (format: "Invoice: DKM/20260104/000001")
+    const invoiceMatch = orderText.match(/Invoice\s*:\s*(DKM\/\d{8}\/\d{6})/i);
+    if (invoiceMatch) {
+      orderId = invoiceMatch[1];
+    } else {
+      // Fallback: Look for order ID pattern anywhere in the message
+      const orderIdMatch = orderText.match(/(DKM\/\d{8}\/\d{6})/i);
+      if (orderIdMatch) {
+        orderId = orderIdMatch[1];
+      }
+    }
+    
+    if (orderId) {
+      // Check if order exists
+      const existingOrder = await getOrderById(orderId);
+      if (existingOrder) {
+        isEdit = true;
+        logger.debug(`[PARSE_ORDER] Detected edit mode for existing order: ${orderId}`);
+      } else {
+        // Order ID found but doesn't exist - treat as new order with custom ID (not recommended)
+        logger.warn(`[PARSE_ORDER] Order ID ${orderId} found in form but order doesn't exist. Creating new order.`);
+        orderId = null; // Will generate new ID below
+      }
+    }
+    
+    // Generate new order ID if not editing
+    if (!isEdit) {
+      orderId = await generateOrderId();
+    }
     
     // Create order data
     const orderData = {
@@ -267,13 +287,15 @@ export async function handleParseOrder(chatId, userId, messageText, sendMessage,
       delivery_time: parsedOrder.delivery_time,
       items: parsedOrder.items,
       notes: parsedOrder.notes,
-      delivery_fee: parsedOrder.delivery_fee !== null && parsedOrder.delivery_fee !== undefined ? parsedOrder.delivery_fee : 0, // Biaya Pengiriman (Ongkir) - default to 0 if not provided
-      delivery_method: parsedOrder.delivery_method || null, // Metode pengiriman (stored in Orders.delivery_method)
-      status: 'pending',
-      created_at: new Date().toISOString(),
+      delivery_method: parsedOrder.delivery_method,
+      delivery_fee: parsedOrder.delivery_fee,
+      // If editing, preserve existing status and created_at (don't overwrite)
+      // If new, set default values
+      status: isEdit ? undefined : 'pending',
+      created_at: isEdit ? undefined : new Date().toISOString(),
     };
 
-    // Save order
+    // Save order (will update if exists, create if new)
     await saveOrder(orderData);
 
     // Get price list and calculate totals
@@ -281,7 +303,9 @@ export async function handleParseOrder(chatId, userId, messageText, sendMessage,
     const calculation = calculateOrderTotal(orderData.items, priceList);
 
     // Format order summary
-    let summary = `✅ **ORDER SUMMARY**\n\n`;
+    let summary = isEdit 
+      ? `✅ **ORDER UPDATED**\n\n`
+      : `✅ **ORDER SUMMARY**\n\n`;
     summary += `📋 Order ID: ${orderId}\n`;
     summary += `👤 Customer: ${orderData.customer_name}\n`;
     summary += `📞 Phone: ${orderData.phone_number}\n`;
@@ -298,7 +322,7 @@ export async function handleParseOrder(chatId, userId, messageText, sendMessage,
       summary += `   Subtotal: Rp ${formatPrice(item.itemTotal)}\n`;
     });
     summary += `\n💰 **Total: Rp ${formatPrice(calculation.subtotal)}**\n`;
-    summary += `\n✅ Order berhasil disimpan!`;
+    summary += `\n${isEdit ? '✅ Order berhasil diperbarui!' : '✅ Order berhasil disimpan!'}`;
 
     await sendMessage(chatId, summary);
   } catch (error) {
@@ -316,12 +340,12 @@ export async function handleParseOrder(chatId, userId, messageText, sendMessage,
  * @param {Function} sendMessage - Function to send Telegram message
  */
 export async function handleOrderDetail(chatId, userId, orderId, sendMessage) {
-  logger.debug(`🔍 [ORDER_DETAIL] Command received - chatId: ${chatId}, userId: ${userId}, orderId: ${orderId || 'MISSING'}`);
+  logger.debug(`[ORDER_DETAIL] Command received - chatId: ${chatId}, userId: ${userId}, orderId: ${orderId || 'MISSING'}`);
   
   try {
     // Check admin access
     const isUserAdmin = await isAdmin(userId);
-    logger.debug(`🔍 [ORDER_DETAIL] Admin check - userId: ${userId}, isAdmin: ${isUserAdmin}`);
+    logger.debug(`[ORDER_DETAIL] Admin check - userId: ${userId}, isAdmin: ${isUserAdmin}`);
     
     if (!isUserAdmin) {
       await sendMessage(chatId, '❌ Anda tidak memiliki akses ke perintah ini. Perintah ini hanya untuk admin.');
@@ -334,8 +358,10 @@ export async function handleOrderDetail(chatId, userId, orderId, sendMessage) {
     }
 
     const trimmedOrderId = orderId.trim();
-    console.log(`🔍 [ORDER_DETAIL] Looking up order: ${trimmedOrderId}`);
+    logger.debug(`[ORDER_DETAIL] Looking up order: ${trimmedOrderId}`);
 
+    // CRITICAL: Always read fresh from Google Sheets (no cache)
+    // This ensures /order_detail shows latest data after /edit
     const order = await getOrderById(trimmedOrderId);
     
     if (!order) {
@@ -343,11 +369,19 @@ export async function handleOrderDetail(chatId, userId, orderId, sendMessage) {
       return;
     }
 
-    console.log(`✅ [ORDER_DETAIL] Order found: ${order.id}`);
+    logger.debug(`✅ [ORDER_DETAIL] Order found: ${order.id}`);
 
     // Get price list for calculation
-    const priceList = await getPriceList();
-    const calculation = calculateOrderTotal(order.items || [], priceList);
+    let priceList;
+    let calculation;
+    try {
+      priceList = await getPriceList();
+      calculation = calculateOrderTotal(order.items || [], priceList);
+    } catch (error) {
+      logger.error('[ORDER_DETAIL] Error calculating totals:', error);
+      logger.error('[ORDER_DETAIL] Error message:', error?.message || 'Unknown error');
+      throw new Error(`Failed to calculate order totals: ${error?.message || 'Unknown error'}`);
+    }
 
     // Format order detail with comprehensive information
     let detail = `📋 **ORDER DETAIL**\n\n`;
@@ -381,9 +415,6 @@ export async function handleOrderDetail(chatId, userId, orderId, sendMessage) {
       }
       if (order.delivery_time) {
         detail += `Time: ${order.delivery_time}\n`;
-      }
-      if (order.delivery_method || order.shipping_method) {
-        detail += `🚚 Delivery Method: ${order.delivery_method || order.shipping_method}\n`;
       }
     }
 
@@ -475,19 +506,16 @@ export async function handleOrderDetail(chatId, userId, orderId, sendMessage) {
       detail += `\n📝 **Notes:**\n${filteredNotes.join('\n')}\n`;
     }
     
-    if (order.created_at) {
-      detail += `\n📅 **Created:** ${new Date(order.created_at).toLocaleString('id-ID')}\n`;
-    }
-    if (order.updated_at) {
-      detail += `**Updated:** ${new Date(order.updated_at).toLocaleString('id-ID')}\n`;
-    }
+    // Removed Created/Updated timestamps from output (per requirements)
 
     await sendMessage(chatId, detail);
-    console.log(`✅ [ORDER_DETAIL] Successfully sent order details for ${trimmedOrderId}`);
+    logger.debug(`✅ [ORDER_DETAIL] Successfully sent order details for ${trimmedOrderId}`);
   } catch (error) {
-    console.error('❌ [ORDER_DETAIL] Error getting order detail:', error);
-    console.error('❌ [ORDER_DETAIL] Stack:', error.stack);
-    await sendMessage(chatId, '❌ Maaf, ada error saat memproses perintah ini. Coba lagi ya.');
+    logger.error('[ORDER_DETAIL] Error getting order detail:', error);
+    logger.error('[ORDER_DETAIL] Error message:', error?.message || 'Unknown error');
+    logger.error('[ORDER_DETAIL] Error stack:', error?.stack || 'No stack trace');
+    logger.error('[ORDER_DETAIL] Error details:', JSON.stringify(error, Object.getOwnPropertyNames(error)));
+    await sendMessage(chatId, `❌ Maaf, ada error saat memproses perintah ini: ${error?.message || 'Unknown error'}. Silakan coba lagi.`);
   }
 }
 
@@ -535,8 +563,6 @@ export async function handleStatus(chatId, userId, orderId, sendMessage) {
  * @param {Function} sendMessage - Function to send Telegram message
  */
 export async function handlePay(chatId, userId, orderId, amountInput, sendMessage) {
-  logger.debug(`🔍 [PAY] Command received - chatId: ${chatId}, userId: ${userId}, orderId: ${orderId || 'MISSING'}, amountInput: ${amountInput || 'MISSING'}`);
-  
   if (!(await requireAdmin(userId, sendMessage, chatId))) {
     await sendMessage(chatId, '❌ Anda tidak memiliki akses ke perintah ini.');
     return;
@@ -566,13 +592,9 @@ export async function handlePay(chatId, userId, orderId, amountInput, sendMessag
       return;
     }
 
-    console.log(`🔍 [PAY] Parsed amount: ${newPaymentAmount} (from input: "${amountInput}")`);
 
     // Update payment (will accumulate with existing)
     const result = await updateOrderPayment(orderId, newPaymentAmount);
-    
-    console.log(`✅ [PAY] Payment updated - Order: ${orderId}, New Payment: ${newPaymentAmount}, Total Paid: ${result.paidAmount}, Status: ${result.paymentStatus}`);
-    
     const message = formatPaymentStatusMessage({
       id: result.orderId,
       total_amount: result.totalAmount || result.finalTotal, // Use totalAmount (canonical)
@@ -638,8 +660,6 @@ export async function handlePaymentStatus(chatId, userId, orderId, sendMessage) 
  */
 async function getOrdersByISODate(targetISO, paymentStatusFilter = null) {
   try {
-    logger.debug(`[ORDERS_FILTER] targetISO="${targetISO}"`);
-    
     // Get all orders (we'll filter by date)
     const allOrders = await getAllOrders(10000); // Get large limit to ensure we get all orders
     
@@ -654,17 +674,17 @@ async function getOrdersByISODate(targetISO, paymentStatusFilter = null) {
       const normalizedOrderDate = toISODateJakarta(orderDate);
       
       if (!normalizedOrderDate) {
-        // Skip invalid dates silently in production
-        logger.debug(`[ORDERS_FILTER] raw="${orderDate}" normalized=null (skipping)`);
+        // Log for debugging but don't fail the filter
         return false;
       }
       
       // Compare normalized ISO dates
-      return normalizedOrderDate === targetISO;
+      const matches = normalizedOrderDate === targetISO;
+      if (matches) {
+      }
+      
+      return matches;
     });
-    
-    logger.debug(`[ORDERS_FILTER] targetISO="${targetISO}" matched=${filteredOrders.length} total=${allOrders.length}`);
-    
     // Remove duplicates by order_id (defensive - should not happen, but handle it)
     const uniqueOrders = [];
     const seenOrderIds = new Set();
@@ -678,7 +698,7 @@ async function getOrdersByISODate(targetISO, paymentStatusFilter = null) {
         uniqueOrders.push(order);
       } else {
         // Duplicate found - log warning
-        logger.warn(`[GET_ORDERS_BY_ISO_DATE] Duplicate order_id found: ${orderId} (skipping duplicate)`);
+        console.warn(`⚠️ [GET_ORDERS_BY_ISO_DATE] Duplicate order_id found: ${orderId} (skipping duplicate)`);
       }
     }
     
@@ -694,7 +714,6 @@ async function getOrdersByISODate(targetISO, paymentStatusFilter = null) {
         }
         return orderPaymentStatus === filterUpper;
       });
-      logger.debug(`[GET_ORDERS_BY_ISO_DATE] Filtered by payment_status="${paymentStatusFilter}": ${uniqueOrders.length} -> ${finalOrders.length} orders`);
     }
     
     // Sort by delivery_time (HH:MM format, lexicographically safe)
@@ -706,7 +725,7 @@ async function getOrdersByISODate(targetISO, paymentStatusFilter = null) {
     
     return finalOrders;
   } catch (error) {
-    logger.error('[GET_ORDERS_BY_ISO_DATE] Error:', error);
+    console.error('❌ [GET_ORDERS_BY_ISO_DATE] Error:', error);
     throw error;
   }
 }
@@ -721,12 +740,9 @@ async function getOrdersByDate(targetDate, paymentStatusFilter = null) {
   // Normalize target date to ISO format (YYYY-MM-DD) in Asia/Jakarta
   const targetDateISO = toISODateJakarta(targetDate);
   if (!targetDateISO) {
-    logger.error(`[GET_ORDERS_BY_DATE] Invalid target date: ${targetDate}`);
+    console.error(`❌ [GET_ORDERS_BY_DATE] Invalid target date: ${targetDate}`);
     throw new Error(`Invalid target date: ${targetDate}`);
   }
-  
-  logger.debug(`[ORDERS_DATE] targetDate="${targetDate}" normalized="${targetDateISO}"`);
-  
   // Use centralized filter function
   return await getOrdersByISODate(targetDateISO, paymentStatusFilter);
 }
@@ -972,8 +988,7 @@ function formatRecapMessage(orders, date) {
     message += `👤 Customer: ${customerName}\n`;
     message += `📞 Phone: ${phoneNumber}\n`;
     message += `📍 Address: ${address}\n\n`;
-    message += `🕐 Delivery Time: ${deliveryTime}\n`;
-    message += `🚚 Delivery Method: ${deliveryMethod}\n\n`;
+    message += `🕐 Delivery Time: ${deliveryTime}\n\n`;
     message += `📦 Items:\n${itemsList}`;
     message += `\n📝 Notes:\n${notesStr}\n\n`;
     message += `✅ Payment Status: ${paymentStatusText}\n\n`;
@@ -1234,8 +1249,6 @@ function getTomorrowDate() {
  */
 export async function handleRecapH1(chatId, userId, sendMessage) {
   try {
-    logger.debug(`[RECAP_H1] Command received - userId: ${userId}, chatId: ${chatId}`);
-    
     // Check admin access
     if (!(await isAdmin(userId))) {
       await sendMessage(chatId, 'Maaf, command ini hanya untuk admin.');
@@ -1244,19 +1257,19 @@ export async function handleRecapH1(chatId, userId, sendMessage) {
     
     // Get tomorrow's date
     const tomorrow = getTomorrowDate();
-    logger.debug(`[RECAP_H1] Fetching orders for tomorrow: ${tomorrow}`);
-    
     // Get orders for tomorrow (filter by FULLPAID only)
     const orders = await getOrdersByDate(tomorrow, 'FULLPAID');
-    logger.debug(`[RECAP_H1] Found ${orders.length} FULLPAID orders for ${tomorrow}`);
+    // Log first 3 order IDs for sanity check
+    if (orders.length > 0) {
+      const orderIds = orders.slice(0, 3).map(o => o.id).join(', ');
+    }
     
     // Format and send recap message
     const message = formatRecapMessage(orders, tomorrow);
     await sendMessage(chatId, message);
-    
-    logger.debug(`[RECAP_H1] Recap sent successfully`);
   } catch (error) {
-    logger.error('[RECAP_H1] Error:', error);
+    console.error('❌ [RECAP_H1] Error:', error);
+    console.error('❌ [RECAP_H1] Stack:', error.stack);
     await sendMessage(chatId, '❌ Terjadi kesalahan saat mengambil rekapan pesanan. Silakan coba lagi.');
   }
 }
@@ -1270,8 +1283,6 @@ export async function handleRecapH1(chatId, userId, sendMessage) {
  */
 export async function handleOrdersDate(chatId, userId, dateStr, sendMessage) {
   try {
-    logger.debug(`[ORDERS_DATE] Command received - userId: ${userId}, dateStr: "${dateStr}"`);
-    
     // Check admin access
     if (!(await isAdmin(userId))) {
       await sendMessage(chatId, 'Maaf, command ini hanya untuk admin.');
@@ -1282,10 +1293,8 @@ export async function handleOrdersDate(chatId, userId, dateStr, sendMessage) {
     let targetDate;
     if (dateStr === 'today' || dateStr === 'hari ini') {
       targetDate = getTodayDate();
-      logger.debug(`[ORDERS_TODAY] todayISO=${targetDate}`);
     } else if (dateStr === 'tomorrow' || dateStr === 'besok') {
       targetDate = getTomorrowDate();
-      logger.debug(`[ORDERS_TOMORROW] tomorrowISO=${targetDate}`);
     } else {
       // Validate and normalize date format
       // Accept YYYY-MM-DD, DD/MM/YYYY, or other formats (will be normalized)
@@ -1297,19 +1306,534 @@ export async function handleOrdersDate(chatId, userId, dateStr, sendMessage) {
       targetDate = normalized;
     }
     
-    logger.debug(`[ORDERS_DATE] Fetching orders for date: ${targetDate} (normalized)`);
     
     // Get orders for target date (filter by FULLPAID only)
     const orders = await getOrdersByDate(targetDate, 'FULLPAID');
-    logger.debug(`[ORDERS_DATE] Found ${orders.length} FULLPAID orders for ${targetDate}`);
+    // Debug logging
+    if (dateStr === 'today' || dateStr === 'hari ini') {
+    } else if (dateStr === 'tomorrow' || dateStr === 'besok') {
+    }
+    
+    // Log first 3 order IDs for sanity check
+    if (orders.length > 0) {
+      const orderIds = orders.slice(0, 3).map(o => o.id).join(', ');
+    }
     
     // Format and send list message
     const message = formatOrderListMessage(orders, targetDate);
     await sendMessage(chatId, message);
-    
-    logger.debug(`[ORDERS_DATE] Order list sent successfully`);
   } catch (error) {
-    logger.error('[ORDERS_DATE] Error:', error);
+    console.error('❌ [ORDERS_DATE] Error:', error);
+    console.error('❌ [ORDERS_DATE] Stack:', error.stack);
     await sendMessage(chatId, '❌ Terjadi kesalahan saat mengambil daftar pesanan. Silakan coba lagi.');
+  }
+}
+
+/**
+ * Format order data into editable form template (pre-filled with existing data)
+ * @param {Object} order - Order object from database
+ * @returns {string} Formatted order form template
+ */
+function formatOrderFormTemplate(order) {
+  // Get items as formatted string
+  const itemsText = (order.items || []).map(item => 
+    `${item.quantity}x ${item.name}`
+  ).join('\n') || '';
+
+  // Get all notes first (to check for packaging)
+  const allNotes = order.notes || [];
+  
+  // Check if packaging is requested (check original notes before filtering)
+  const hasPackaging = allNotes.some(note => {
+    const noteLower = String(note || '').toLowerCase().trim();
+    return noteLower.includes('packaging styrofoam') && 
+           (noteLower.includes(': ya') || noteLower.includes(': yes') || 
+            noteLower === 'packaging styrofoam: ya' || noteLower === 'packaging styrofoam: yes');
+  });
+  
+  // Filter out packaging notes for display
+  const notes = allNotes.filter(note => {
+    const noteLower = String(note || '').toLowerCase().trim();
+    return !(noteLower.includes('packaging styrofoam') && 
+             (noteLower.includes(': ya') || noteLower.includes(': yes') || 
+              noteLower === 'packaging styrofoam: ya' || noteLower === 'packaging styrofoam: yes'));
+  });
+  const notesText = notes.join('\n') || '';
+
+  // Format event date (convert YYYY-MM-DD to DD/MM/YYYY if needed)
+  let eventDateFormatted = order.event_date || '';
+  if (eventDateFormatted && eventDateFormatted.includes('-')) {
+    const parts = eventDateFormatted.split('-');
+    if (parts.length === 3) {
+      eventDateFormatted = `${parts[2]}/${parts[1]}/${parts[0]}`;
+    }
+  }
+
+  // Format delivery time (ensure HH:MM format)
+  let deliveryTimeFormatted = order.delivery_time || '';
+  if (deliveryTimeFormatted && !deliveryTimeFormatted.includes(':')) {
+    // If time is in wrong format, try to fix it
+    deliveryTimeFormatted = deliveryTimeFormatted.replace(/\./g, ':');
+  }
+
+  // Format delivery fee
+  const deliveryFeeFormatted = order.delivery_fee 
+    ? (typeof order.delivery_fee === 'number' ? order.delivery_fee.toString() : order.delivery_fee)
+    : '';
+
+  // Build form template (include Invoice field so parser can detect edit mode)
+  let form = `📝 **EDIT ORDER**\n\n`;
+  form += `**Invoice:** ${order.id || 'N/A'}\n\n`;
+  form += `Silakan edit form berikut dan kirim kembali:\n\n`;
+  form += `Invoice: ${order.id || 'N/A'}\n`;
+  form += `Nama Pemesan: ${order.customer_name || ''}\n`;
+  form += `Nama Penerima: ${order.receiver_name || order.customer_name || ''}\n`;
+  form += `No HP Penerima: ${order.phone_number || ''}\n`;
+  form += `Alamat Penerima: ${order.address || ''}\n\n`;
+  form += `Nama Event (jika ada): ${order.event_name || ''}\n`;
+  form += `Durasi Event (dalam jam): ${order.event_duration || ''}\n\n`;
+  form += `Tanggal Event: ${eventDateFormatted}\n`;
+  form += `Waktu Kirim (jam): ${deliveryTimeFormatted}\n\n`;
+  form += `Detail Pesanan:\n${itemsText}\n\n`;
+  form += `Packaging Styrofoam\n`;
+  form += `(1 box Rp40.000 untuk 50 cup): ${hasPackaging ? 'YA' : 'TIDAK'}\n\n`;
+  form += `Metode Pengiriman: ${order.delivery_method || 'Pickup'}\n\n`;
+  form += `Biaya Pengiriman (Rp): ${deliveryFeeFormatted}\n\n`;
+  form += `Notes:\n${notesText}\n\n`;
+  form += `Mendapatkan info Dawet Kemayu Menteng dari:\n`;
+  form += `${order.source || 'Teman / Instagram / Facebook / TikTok / Lainnya'}`;
+
+  return form;
+}
+
+/**
+ * Handle /edit command
+ * Updates order with new data from form
+ * Accepts: /edit ORDER_ID followed by updated form in same message or reply
+ * Automatically compares fields and updates only changed values
+ * @param {string|number} chatId - Telegram chat ID
+ * @param {number} userId - Telegram user ID
+ * @param {string} messageText - Full message text (command + form)
+ * @param {Function} sendMessage - Function to send Telegram message
+ * @param {Object} replyToMessage - Optional reply_to_message object
+ */
+export async function handleEditOrder(chatId, userId, messageText, sendMessage, replyToMessage = null) {
+  logger.debug(`[EDIT_ORDER] Command received - chatId: ${chatId}, userId: ${userId}`);
+  
+  try {
+    // Check admin access
+    if (!(await requireAdmin(userId, sendMessage, chatId))) {
+      return;
+    }
+
+    // Extract order ID and form data
+    let orderId = null;
+    let formText = '';
+    
+    // Method 1: Check if form is in reply_to_message
+    if (replyToMessage && replyToMessage.text) {
+      formText = replyToMessage.text.trim();
+      // Extract order ID from command message (first line)
+      const commandMatch = messageText.match(/^\/edit\s+(DKM\/\d{8}\/\d{6})/i);
+      if (commandMatch) {
+        orderId = commandMatch[1];
+      }
+      logger.debug(`[EDIT_ORDER] Using reply_to_message - orderId: ${orderId}, form length: ${formText.length}`);
+    } else {
+      // Method 2: Extract from same message
+      // Format: /edit ORDER_ID\n[form] - form starts after first newline
+      const lines = messageText.split('\n');
+      const firstLine = lines[0] || '';
+      
+      // Try to extract order ID from first line
+      const orderIdMatch = firstLine.match(/^\/edit\s+(DKM\/\d{8}\/\d{6})/i);
+      if (orderIdMatch) {
+        orderId = orderIdMatch[1];
+        // Form is everything after first line (remove empty lines at start)
+        formText = lines.slice(1).join('\n').trim();
+        logger.debug(`[EDIT_ORDER] Extracted from same message - orderId: ${orderId}, form length: ${formText.length}`);
+      } else {
+        // Fallback: Try to find order ID anywhere in message
+        const orderIdPattern = /(DKM\/\d{8}\/\d{6})/i;
+        const globalMatch = messageText.match(orderIdPattern);
+        if (globalMatch) {
+          orderId = globalMatch[1];
+          // Remove command line and order ID from form text
+          formText = messageText
+            .replace(/^\/edit\s*/i, '')
+            .replace(new RegExp(orderId, 'gi'), '')
+            .trim();
+          logger.debug(`[EDIT_ORDER] Found order ID in message - orderId: ${orderId}, form length: ${formText.length}`);
+        }
+      }
+    }
+
+    // Validate order ID
+    if (!orderId || !orderId.trim()) {
+      await sendMessage(
+        chatId,
+        '❌ Format: /edit <ORDER_ID>\n\n' +
+        'Kemudian kirim form pesanan yang sudah diupdate.\n\n' +
+        '**Contoh penggunaan (1 pesan):**\n' +
+        '/edit DKM/20260107/000037\n\n' +
+        'Nama Pemesan: Novi\n' +
+        'No HP Penerima: 081234567\n' +
+        'Alamat Penerima: ...\n' +
+        '(form lengkap)\n\n' +
+        '**Atau (2 pesan):**\n' +
+        '1. Ketik: /edit DKM/20260107/000037\n' +
+        '2. Reply pesan tersebut dengan form yang sudah diedit'
+      );
+      return;
+    }
+
+    const trimmedOrderId = orderId.trim();
+    
+    // Validate form text
+    if (!formText || formText.length < 50) {
+      await sendMessage(
+        chatId,
+        '❌ Form pesanan tidak ditemukan atau terlalu pendek.\n\n' +
+        'Pastikan Anda mengirim form pesanan lengkap setelah perintah /edit.\n\n' +
+        '**Format:**\n' +
+        '/edit DKM/20260107/000037\n\n' +
+        'Nama Pemesan: ...\n' +
+        'No HP Penerima: ...\n' +
+        'Alamat Penerima: ...\n' +
+        '(form lengkap)'
+      );
+      return;
+    }
+
+    logger.debug(`[EDIT_ORDER] Looking up order: ${trimmedOrderId}`);
+
+    // Fetch existing order
+    const existingOrder = await getOrderById(trimmedOrderId);
+    
+    if (!existingOrder) {
+      await sendMessage(chatId, `❌ Order ID "${trimmedOrderId}" tidak ditemukan.`);
+      return;
+    }
+
+    logger.debug(`✅ [EDIT_ORDER] Order found: ${existingOrder.id}`);
+
+    // Parse the updated form
+    logger.debug(`[EDIT_ORDER] Parsing form text (${formText.length} chars)...`);
+    const parsedOrder = parseOrderFromMessageAuto(formText);
+    
+    // Log parsed items for debugging
+    logger.debug(`[EDIT_ORDER] Parsed items:`, JSON.stringify(parsedOrder.items, null, 2));
+    logger.debug(`[EDIT_ORDER] Parsed items count: ${parsedOrder.items.length}`);
+    parsedOrder.items.forEach((item, idx) => {
+      logger.debug(`[EDIT_ORDER] Item ${idx + 1}: ${item.quantity}x ${item.name}`);
+    });
+    
+    const validation = validateOrder(parsedOrder);
+
+    if (!validation.valid) {
+      await sendMessage(
+        chatId,
+        `❌ **Form tidak valid**\n\n` +
+        `Kesalahan:\n${validation.errors.join('\n')}\n\n` +
+        `Silakan perbaiki dan coba lagi.`
+      );
+      return;
+    }
+
+    // Prepare updated order data - merge parsed form with existing order
+    // Support partial updates: only update fields that are provided in form
+    // For fields not in form, keep existing values
+    const updatedOrderData = {
+      id: trimmedOrderId, // Keep same order ID (required for update)
+    };
+    
+    // Track which fields changed (for logging)
+    const changedFields = [];
+    
+    // Merge strategy: Use parsed value if provided, otherwise keep existing
+    // Required fields (always update if provided in form)
+    if (parsedOrder.customer_name) {
+      if (parsedOrder.customer_name !== existingOrder.customer_name) {
+        updatedOrderData.customer_name = parsedOrder.customer_name;
+        changedFields.push('customer_name');
+      } else {
+        updatedOrderData.customer_name = existingOrder.customer_name;
+      }
+    } else {
+      updatedOrderData.customer_name = existingOrder.customer_name;
+    }
+    
+    if (parsedOrder.phone_number) {
+      if (parsedOrder.phone_number !== existingOrder.phone_number) {
+        updatedOrderData.phone_number = parsedOrder.phone_number;
+        changedFields.push('phone_number');
+      } else {
+        updatedOrderData.phone_number = existingOrder.phone_number;
+      }
+    } else {
+      updatedOrderData.phone_number = existingOrder.phone_number;
+    }
+    
+    if (parsedOrder.address) {
+      if (parsedOrder.address !== existingOrder.address) {
+        updatedOrderData.address = parsedOrder.address;
+        changedFields.push('address');
+      } else {
+        updatedOrderData.address = existingOrder.address;
+      }
+    } else {
+      updatedOrderData.address = existingOrder.address;
+    }
+    
+    // Optional fields - update if provided, keep existing if not
+    updatedOrderData.receiver_name = parsedOrder.receiver_name !== null && parsedOrder.receiver_name !== undefined 
+      ? parsedOrder.receiver_name 
+      : (existingOrder.receiver_name || '');
+    if (updatedOrderData.receiver_name !== (existingOrder.receiver_name || '')) {
+      changedFields.push('receiver_name');
+    }
+    
+    updatedOrderData.event_name = parsedOrder.event_name !== null && parsedOrder.event_name !== undefined 
+      ? parsedOrder.event_name 
+      : (existingOrder.event_name || '');
+    if (updatedOrderData.event_name !== (existingOrder.event_name || '')) {
+      changedFields.push('event_name');
+    }
+    
+    updatedOrderData.event_duration = parsedOrder.event_duration !== null && parsedOrder.event_duration !== undefined 
+      ? parsedOrder.event_duration 
+      : (existingOrder.event_duration || '');
+    if (updatedOrderData.event_duration !== (existingOrder.event_duration || '')) {
+      changedFields.push('event_duration');
+    }
+    
+    updatedOrderData.event_date = parsedOrder.event_date || (existingOrder.event_date || '');
+    if (updatedOrderData.event_date !== (existingOrder.event_date || '')) {
+      changedFields.push('event_date');
+    }
+    
+    updatedOrderData.delivery_time = parsedOrder.delivery_time || (existingOrder.delivery_time || '');
+    if (updatedOrderData.delivery_time !== (existingOrder.delivery_time || '')) {
+      changedFields.push('delivery_time');
+    }
+    
+    // Items - update if provided in form
+    // CRITICAL: Always use parsed items if they exist (form was provided)
+    if (parsedOrder.items && parsedOrder.items.length > 0) {
+      const existingItemsJson = JSON.stringify(existingOrder.items || []);
+      const parsedItemsJson = JSON.stringify(parsedOrder.items);
+      
+      logger.debug(`[EDIT_ORDER] Comparing items:`);
+      logger.debug(`[EDIT_ORDER] Existing: ${existingItemsJson}`);
+      logger.debug(`[EDIT_ORDER] Parsed: ${parsedItemsJson}`);
+      
+      if (parsedItemsJson !== existingItemsJson) {
+        updatedOrderData.items = parsedOrder.items; // Use parsed items (from form)
+        changedFields.push('items');
+        logger.debug(`[EDIT_ORDER] Items changed - using parsed items:`, JSON.stringify(parsedOrder.items));
+      } else {
+        updatedOrderData.items = existingOrder.items;
+        logger.debug(`[EDIT_ORDER] Items unchanged - keeping existing`);
+      }
+    } else {
+      // No items in form - keep existing
+      updatedOrderData.items = existingOrder.items;
+      logger.debug(`[EDIT_ORDER] No items in parsed form - keeping existing items`);
+    }
+    
+    // Notes - update if provided in form
+    if (parsedOrder.notes && parsedOrder.notes.length > 0) {
+      const existingNotesJson = JSON.stringify(existingOrder.notes || []);
+      const parsedNotesJson = JSON.stringify(parsedOrder.notes);
+      if (parsedNotesJson !== existingNotesJson) {
+        updatedOrderData.notes = parsedOrder.notes;
+        changedFields.push('notes');
+      } else {
+        updatedOrderData.notes = existingOrder.notes;
+      }
+    } else {
+      updatedOrderData.notes = existingOrder.notes;
+    }
+    
+    // Delivery method - update if provided
+    updatedOrderData.delivery_method = parsedOrder.delivery_method || (existingOrder.delivery_method || 'Pickup');
+    if (updatedOrderData.delivery_method !== (existingOrder.delivery_method || 'Pickup')) {
+      changedFields.push('delivery_method');
+    }
+    
+    // Delivery fee - update if provided (handle null/0 explicitly)
+    const existingDeliveryFee = existingOrder.delivery_fee !== null && existingOrder.delivery_fee !== undefined ? existingOrder.delivery_fee : null;
+    const parsedDeliveryFee = parsedOrder.delivery_fee !== null && parsedOrder.delivery_fee !== undefined ? parsedOrder.delivery_fee : null;
+    
+    // If delivery_fee is explicitly provided in form (even if 0), use it
+    // Otherwise keep existing
+    if (parsedOrder.delivery_fee !== null && parsedOrder.delivery_fee !== undefined) {
+      updatedOrderData.delivery_fee = parsedDeliveryFee;
+      if (parsedDeliveryFee !== existingDeliveryFee) {
+        changedFields.push('delivery_fee');
+      }
+    } else {
+      updatedOrderData.delivery_fee = existingDeliveryFee;
+    }
+    
+    // Preserve existing metadata (don't change on edit)
+    updatedOrderData.status = existingOrder.status || 'pending';
+    updatedOrderData.created_at = existingOrder.created_at;
+    updatedOrderData.conversation_id = existingOrder.conversation_id || '';
+    
+    // Log what changed
+    if (changedFields.length > 0) {
+      logger.debug(`[EDIT_ORDER] Changed fields: ${changedFields.join(', ')}`);
+    } else {
+      logger.debug(`[EDIT_ORDER] No fields changed (form matches existing order)`);
+    }
+
+    // Save updated order (saveOrder handles upsert - updates if exists, creates if new)
+    // saveOrder will calculate totals including packaging fee and save to Google Sheets
+    logger.debug(`[EDIT_ORDER] Saving order ${trimmedOrderId} to Google Sheets...`);
+    
+    // CRITICAL: Log what we're about to save
+    logger.debug(`[EDIT_ORDER] About to save order with items:`, JSON.stringify(updatedOrderData.items, null, 2));
+    logger.debug(`[EDIT_ORDER] Items JSON string:`, JSON.stringify(updatedOrderData.items));
+    
+    // CRITICAL: Save order to Google Sheets - this MUST persist the update
+    const savedOrder = await saveOrder(updatedOrderData);
+    
+    logger.debug(`[EDIT_ORDER] Order saved successfully. Totals:`, {
+      productTotal: savedOrder.productTotal,
+      packagingFee: savedOrder.packagingFee,
+      deliveryFee: savedOrder.deliveryFee,
+      totalAmount: savedOrder.totalAmount
+    });
+    
+    // CRITICAL: Re-read order from Google Sheets to verify update persisted
+    // This ensures we display what's actually in the sheet, not what we think we saved
+    logger.debug(`[EDIT_ORDER] Re-reading order from Google Sheets to verify update...`);
+    
+    // Wait a moment for Google Sheets to update (sometimes there's a slight delay)
+    await new Promise(resolve => setTimeout(resolve, 500));
+    
+    const verifiedOrder = await getOrderById(trimmedOrderId);
+    
+    if (!verifiedOrder) {
+      logger.error(`[EDIT_ORDER] CRITICAL: Order ${trimmedOrderId} not found after save!`);
+      await sendMessage(chatId, `❌ Error: Order tidak ditemukan setelah update. Silakan coba lagi.`);
+      return;
+    }
+    
+    logger.debug(`[EDIT_ORDER] Verified: Order ${trimmedOrderId} exists in Google Sheets`);
+    logger.debug(`[EDIT_ORDER] Verified order items:`, JSON.stringify(verifiedOrder.items, null, 2));
+    
+    // Use verified order data for display (single source of truth)
+    const displayOrder = verifiedOrder;
+
+    // Get price list for display calculations
+    const priceList = await getPriceList();
+    
+    // Use verified order from Google Sheets (single source of truth)
+    const displayItems = displayOrder.items || [];
+    
+    // CRITICAL: Log what we're displaying
+    logger.debug(`[EDIT_ORDER] Display items from verified order:`, JSON.stringify(displayItems, null, 2));
+    displayItems.forEach((item, idx) => {
+      logger.debug(`[EDIT_ORDER] Display item ${idx + 1}: ${item.quantity}x ${item.name}`);
+    });
+    
+    const calculation = calculateOrderTotal(displayItems, priceList);
+
+    // Calculate packaging info (for display) from verified order
+    let totalCups = 0;
+    let hasPackagingRequest = false;
+    
+    // Count total cups from items (Dawet Small/Medium/Large, excluding botol)
+    displayItems.forEach(item => {
+      const itemName = (item.name || '').toLowerCase();
+      if (itemName.includes('dawet') && 
+          (itemName.includes('small') || itemName.includes('medium') || itemName.includes('large'))) {
+        if (!itemName.includes('botol')) {
+          totalCups += parseInt(item.quantity || 0);
+        }
+      }
+    });
+    
+    // Check if packaging is requested in notes
+    const notes = displayOrder.notes || [];
+    hasPackagingRequest = notes.some(note => {
+      const noteLower = String(note || '').toLowerCase().trim();
+      return noteLower.includes('packaging styrofoam') && 
+             (noteLower.includes(': ya') || noteLower.includes(': yes') || 
+              noteLower === 'packaging styrofoam: ya' || noteLower === 'packaging styrofoam: yes');
+    });
+    
+    // Calculate required packaging boxes (1 box per 50 cups, rounded up)
+    const packagingBoxes = hasPackagingRequest && totalCups > 0 ? Math.ceil(totalCups / 50) : 0;
+    
+    // Use packaging fee from saved order (calculated by computeOrderTotals)
+    const packagingFee = savedOrder.packagingFee || (packagingBoxes * 40000);
+
+    // Format update summary using verified order data
+    let summary = `✅ **ORDER UPDATED**\n\n`;
+    summary += `📋 Order ID: ${trimmedOrderId}\n`;
+    summary += `👤 Customer: ${displayOrder.customer_name || 'N/A'}\n`;
+    summary += `📞 Phone: ${displayOrder.phone_number || 'N/A'}\n`;
+    summary += `📍 Address: ${displayOrder.address || 'N/A'}\n`;
+    if (displayOrder.event_name) {
+      summary += `📅 Event: ${displayOrder.event_name}\n`;
+    }
+    if (displayOrder.event_date) {
+      summary += `📅 Event Date: ${displayOrder.event_date}\n`;
+    }
+    if (displayOrder.delivery_time) {
+      summary += `🕐 Delivery Time: ${displayOrder.delivery_time}\n`;
+    }
+    if (displayOrder.delivery_method) {
+      summary += `🚚 Delivery Method: ${displayOrder.delivery_method}\n`;
+    }
+    summary += `\n📦 **Items:**\n`;
+    
+    // Display regular items (filter out any packaging items that might be in the list)
+    let itemIndex = 1;
+    calculation.itemDetails.forEach((item) => {
+      const itemName = (item.name || '').toLowerCase();
+      // Skip packaging items (we'll add calculated one below)
+      if (itemName.includes('packaging') || itemName.includes('styrofoam')) {
+        return;
+      }
+      summary += `${itemIndex}. ${item.name} (${item.quantity}x)\n`;
+      if (item.itemTotal > 0) {
+        summary += `   Subtotal: Rp ${formatPrice(item.itemTotal)}\n`;
+      }
+      itemIndex++;
+    });
+    
+    // Add packaging item if requested (use saved packaging fee from computeOrderTotals)
+    if (hasPackagingRequest && packagingBoxes > 0 && packagingFee > 0) {
+      summary += `${itemIndex}. Packaging Styrofoam (50 cup) (${packagingBoxes}x)\n`;
+      summary += `   Subtotal: Rp ${formatPrice(packagingFee)}\n`;
+    }
+    
+    // Use totals from savedOrder (which includes packaging fee calculated by computeOrderTotals)
+    const productTotal = savedOrder.productTotal || calculation.subtotal;
+    const totalWithPackaging = productTotal + packagingFee;
+    const deliveryFee = savedOrder.deliveryFee || displayOrder.delivery_fee || 0;
+    const grandTotal = savedOrder.totalAmount || (totalWithPackaging + deliveryFee);
+    
+    summary += `\n💰 **Product Total: Rp ${formatPrice(productTotal)}**\n`;
+    if (packagingFee > 0) {
+      summary += `📦 **Packaging Fee: Rp ${formatPrice(packagingFee)}**\n`;
+    }
+    summary += `💰 **Subtotal: Rp ${formatPrice(totalWithPackaging)}**\n`;
+    if (deliveryFee > 0) {
+      summary += `🚚 **Delivery Fee: Rp ${formatPrice(deliveryFee)}**\n`;
+    }
+    summary += `💰 **Grand Total: Rp ${formatPrice(grandTotal)}**\n`;
+    summary += `\n✅ Order berhasil diperbarui!`;
+
+    await sendMessage(chatId, summary);
+    logger.debug(`✅ [EDIT_ORDER] Order ${trimmedOrderId} updated successfully in Google Sheets`);
+  } catch (error) {
+    logger.error('[EDIT_ORDER] Error:', error);
+    logger.error('[EDIT_ORDER] Stack:', error.stack);
+    await sendMessage(chatId, `❌ Maaf, ada error saat memproses perintah ini: ${error.message || 'Unknown error'}`);
   }
 }

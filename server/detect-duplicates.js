@@ -24,6 +24,7 @@ if (sheetName) {
       }
     })
     .catch((error) => {
+      console.error('\n❌ Detection failed:', error.message);
       process.exit(1);
     });
 } else {
@@ -48,6 +49,7 @@ if (sheetName) {
       }
     })
     .catch((error) => {
+      console.error('\n❌ Detection failed:', error.message);
       process.exit(1);
     });
 }

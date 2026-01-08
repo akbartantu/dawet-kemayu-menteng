@@ -181,6 +181,7 @@ export async function getTelegramChatIdFromOrder(order) {
 
     return chatId;
   } catch (error) {
+    console.error('❌ Error getting Telegram chat ID from order:', error);
     return null;
   }
 }

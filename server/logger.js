@@ -60,7 +60,6 @@ const logger = {
       const message = args.map(arg => 
         typeof arg === 'object' ? safeStringify(arg) : String(arg)
       ).join(' ');
-      console.log(message);
     }
   },
   
@@ -69,7 +68,6 @@ const logger = {
       const message = args.map(arg => 
         typeof arg === 'object' ? safeStringify(arg) : String(arg)
       ).join(' ');
-      console.log(message);
     }
   },
 };

@@ -8,7 +8,10 @@ import express from 'express';
 import dotenv from 'dotenv';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import logger from './logger.js';
+import { exec } from 'child_process';
+import { promisify } from 'util';
+
+const execAsync = promisify(exec);
 import {
   initializeStorage,
   saveMessage,
@@ -64,6 +67,7 @@ import {
   handleParseOrder,
   handleOrderDetail,
   handleStatus,
+  handleEditOrder,
   handlePay,
   handlePaymentStatus,
   handleAdminAuth,
@@ -271,11 +275,6 @@ setInterval(() => {
  * Telegram sends messages to this endpoint when customers message the bot
  */
 app.post('/api/webhooks/telegram', async (req, res) => {
-  const update = req.body;
-  const chatId = update.message?.chat?.id || update.callback_query?.message?.chat?.id || 'unknown';
-  const textPreview = update.message?.text?.substring(0, 50) || update.callback_query?.data?.substring(0, 50) || 'no text';
-  
-  logger.debug('Received Telegram webhook');
 
   // Always respond 200 OK to Telegram immediately
   res.status(200).send('OK');
@@ -301,61 +300,6 @@ app.post('/api/webhooks/telegram', async (req, res) => {
 });
 
 /**
- * Set webhook for production deployment
- */
-async function setWebhook() {
-  const botToken = process.env.TELEGRAM_BOT_TOKEN;
-  
-  if (!botToken) {
-    console.log('⚠️  TELEGRAM_BOT_TOKEN not set. Cannot set webhook.');
-    return;
-  }
-
-  // Get webhook URL from environment variable or construct from Render URL
-  let webhookUrl = process.env.WEBHOOK_URL;
-  
-  // If WEBHOOK_URL not set, try to get from Render's RENDER_EXTERNAL_URL
-  if (!webhookUrl && process.env.RENDER_EXTERNAL_URL) {
-    webhookUrl = process.env.RENDER_EXTERNAL_URL;
-  }
-  
-  // If still not set, try to construct from common Render pattern
-  if (!webhookUrl && process.env.RENDER_SERVICE_NAME) {
-    webhookUrl = `https://${process.env.RENDER_SERVICE_NAME}.onrender.com`;
-  }
-
-  if (!webhookUrl) {
-    console.log('⚠️  WEBHOOK_URL not set. Cannot set webhook automatically.');
-    console.log('   Set WEBHOOK_URL environment variable to your Render app URL');
-    return;
-  }
-
-  try {
-    // Check if WEBHOOK_URL already includes the path
-    let webhookPath;
-    if (webhookUrl.includes('/api/webhooks/telegram')) {
-      // Already has the full path, use as-is
-      webhookPath = webhookUrl;
-    } else {
-      // Just the base URL, add the path
-      webhookPath = `${webhookUrl}/api/webhooks/telegram`;
-    }
-    
-    const url = `${TELEGRAM_API_BASE}${botToken}/setWebhook?url=${encodeURIComponent(webhookPath)}&drop_pending_updates=true`;
-    const response = await fetch(url);
-    const data = await response.json();
-
-    if (data.ok) {
-      console.log(`✅ Webhook set successfully: ${webhookPath}`);
-    } else {
-      console.error(`❌ Webhook setup failed: ${data.description || 'Unknown error'}`);
-    }
-  } catch (error) {
-    console.error('❌ Error setting webhook:', error.message);
-  }
-}
-
-/**
  * Delete webhook (needed before polling)
  * Telegram doesn't allow webhook and polling at the same time
  */
@@ -379,14 +323,11 @@ async function deleteWebhook() {
     const data = await response.json();
 
     if (data.ok) {
-      console.log('✅ Webhook removed (required for polling mode)');
       webhookDeleted = true;
     } else {
-      console.log('ℹ️  No webhook to remove (or already removed)');
       webhookDeleted = true;
     }
   } catch (error) {
-    console.log('⚠️  Could not check/remove webhook:', error.message);
   }
 }
 
@@ -398,11 +339,9 @@ async function startPolling() {
   const botToken = process.env.TELEGRAM_BOT_TOKEN;
   
   if (!botToken) {
-    console.log('⚠️  TELEGRAM_BOT_TOKEN not set. Polling disabled.');
     return;
   }
 
-  console.log('🔄 Starting Telegram polling (local development mode)...');
   
   // First, remove any existing webhook (required!)
   await deleteWebhook();
@@ -456,8 +395,6 @@ async function startPolling() {
       console.error('❌ Error polling Telegram:', error.message);
     }
   }, 2000); // Poll every 2 seconds
-
-  console.log('✅ Polling started! Bot will check for new messages every 2 seconds.');
 }
 
 /**
@@ -467,7 +404,6 @@ function stopPolling() {
   if (pollingInterval) {
     clearInterval(pollingInterval);
     pollingInterval = null;
-    console.log('🛑 Polling stopped');
   }
 }
 
@@ -482,9 +418,6 @@ app.post('/api/messages/whatsapp-manual', async (req, res) => {
     if (!from || !text) {
       return res.status(400).json({ error: 'Missing "from" or "text" field' });
     }
-
-    logger.debug('Manual WhatsApp message input');
-
     // Create conversation ID from phone number
     const conversationId = `conv_whatsapp_${from.replace(/\D/g, '')}`;
 
@@ -502,8 +435,6 @@ app.post('/api/messages/whatsapp-manual', async (req, res) => {
     };
 
     await saveMessage(messageData);
-    logger.debug('WhatsApp message saved to storage');
-
     res.json({
       success: true,
       messageId: messageData.id,
@@ -525,8 +456,6 @@ async function handleTelegramMessage(message) {
   const userName = message.from?.first_name || message.from?.username || 'Unknown';
   const messageText = message.text || '';
   
-  // Log at debug level only (hidden in production by default)
-  logger.debug('💬 New Telegram message received:', {
     from: userName,
     userId: userId,
     chatId: chatId,
@@ -539,12 +468,8 @@ async function handleTelegramMessage(message) {
   // In groups, bot can only receive command messages reliably
   if (chatType === 'group' || chatType === 'supergroup') {
     const isCommand = messageText.startsWith('/');
-
-    logger.debug(`[GROUP_GATE] chatType: ${chatType}, isCommand: ${isCommand}`);
-
     // If not a command, ignore silently (privacy mode)
     if (!isCommand) {
-      logger.debug(`[GROUP_GATE] Ignoring message (not a command, privacy mode)`);
       return; // Silent ignore - no response
     }
 
@@ -577,12 +502,47 @@ async function handleTelegramMessage(message) {
 
     // Save to storage
     await saveMessage(messageData);
-    logger.debug('💾 Telegram message saved to storage');
-
     // Handle bot commands (works in both private and group chats)
     if (message.text?.startsWith('/')) {
       await handleTelegramCommand(message);
       return;
+    }
+
+    // Check for manual confirmation/cancellation responses (Y/Ya/T/Tidak)
+    const messageTextLower = (messageText || '').toLowerCase().trim();
+    const isConfirmation = messageTextLower === 'y' || messageTextLower === 'ya';
+    const isCancellation = messageTextLower === 't' || messageTextLower === 'tidak';
+    
+    if (isConfirmation || isCancellation) {
+      // Find most recent pending order for this conversation
+      const allOrders = await getAllOrders(1000);
+      const pendingOrders = allOrders.filter(order => 
+        order.conversation_id === conversation.id && 
+        order.status === 'pending_confirmation'
+      );
+      
+      // Sort by created_at (most recent first) and get the first one
+      const pendingOrder = pendingOrders.length > 0 
+        ? pendingOrders.sort((a, b) => {
+            const dateA = new Date(a.created_at || 0);
+            const dateB = new Date(b.created_at || 0);
+            return dateB - dateA; // Most recent first
+          })[0]
+        : null;
+      
+      if (pendingOrder) {
+        if (isConfirmation) {
+          // Process confirmation (same as button click)
+          await handleOrderConfirmation(chatId, pendingOrder.id, null);
+          return; // Exit early
+        } else {
+          // Process cancellation
+          await handleOrderCancellation(chatId, pendingOrder.id, null);
+          return; // Exit early
+        }
+      } else {
+        // Continue with normal flow (might be responding to something else)
+      }
     }
 
     // Private chat only: Try to parse order from message (auto-parse)
@@ -597,12 +557,9 @@ async function handleTelegramMessage(message) {
         try {
           // Detect format and parse
           const detectedFormat = detectOrderFormat(message.text);
-          logger.debug(`[ORDER_PARSE] Private chat auto-parse - format: ${detectedFormat || 'none'}`);
-          
           let parsedOrder;
           try {
             parsedOrder = parseOrderFromMessageAuto(message.text);
-            
             // Clear state if order was successfully parsed
             if (parsedOrder.customer_name || parsedOrder.items.length > 0) {
               clearOrderState(chatId, userId, chatType);
@@ -617,9 +574,6 @@ async function handleTelegramMessage(message) {
             }
             throw parseError; // Re-throw other errors
           }
-      
-          logger.debug(`[ORDER_PARSE] Parsed fields`);
-      
       // Get price list to check if notes are actually items
       const priceList = await getPriceList();
       
@@ -631,23 +585,13 @@ async function handleTelegramMessage(message) {
       const validation = validateOrder(parsedOrder);
 
       if (validation.valid) {
-        console.log(`✅ [ORDER_PARSE] Valid order detected in message`);
-        console.log('✅ [ORDER_PARSE] Order detected in message!', {
-          customer: parsedOrder.customer_name,
-          items: parsedOrder.items.length,
-        });
-        
         // Mark as processed IMMEDIATELY to prevent fall-through
         orderProcessed = true;
-        console.log(`✅ [ORDER_HANDLER] Order processed, setting orderProcessed=true, will return early`);
-
         // Generate order ID (MUST be done before any operations)
         const orderId = await generateOrderId();
         if (!orderId) {
           throw new Error('Failed to generate order ID');
         }
-        logger.debug(`[ORDER_CREATE] Generated Order ID: ${orderId}`);
-        
         // Create order
         const orderData = {
           id: orderId,
@@ -661,12 +605,11 @@ async function handleTelegramMessage(message) {
           delivery_time: parsedOrder.delivery_time,
           items: parsedOrder.items,
           notes: parsedOrder.notes,
-          delivery_fee: parsedOrder.delivery_fee !== null && parsedOrder.delivery_fee !== undefined ? parsedOrder.delivery_fee : 0, // Biaya Pengiriman (Ongkir) - default to 0 if not provided
+          delivery_fee: parsedOrder.delivery_fee !== null && parsedOrder.delivery_fee !== undefined ? parsedOrder.delivery_fee : null, // Biaya Pengiriman (Ongkir)
           delivery_method: parsedOrder.delivery_method || null, // Metode pengiriman (stored in Orders.delivery_method)
           status: 'pending',
           created_at: new Date().toISOString(),
         };
-
         // Check if order date is in the future
         const isFuture = isFutureDate(orderData.event_date);
         
@@ -695,26 +638,80 @@ async function handleTelegramMessage(message) {
           const orderSummary = formatOrderSummary(orderData);
           const calculation = calculateOrderTotal(orderData.items, priceList);
 
-          // Create confirmation message with order summary (without total - total shown in invoice after confirmation)
+          // Create confirmation message with order summary and price info
           let confirmationText = `📋 **KONFIRMASI PESANAN**\n\n`;
           confirmationText += orderSummary;
-          confirmationText += `\n\nApakah pesanan ini sudah benar?`;
+          
+          // Calculate packaging fee
+          let packagingFee = 0;
+          let packagingBoxes = 0;
+          const hasPackaging = orderData.notes?.some(note => 
+            note.toLowerCase().includes('packaging') && 
+            (note.toLowerCase().includes('ya') || note.toLowerCase().includes('yes'))
+          );
+          if (hasPackaging) {
+            const totalCups = orderData.items.reduce((sum, item) => {
+              const name = (item.name || '').toLowerCase();
+              if (name.includes('dawet') && (name.includes('small') || name.includes('medium') || name.includes('large')) && !name.includes('botol')) {
+                return sum + (item.quantity || 0);
+              }
+              return sum;
+            }, 0);
+            packagingBoxes = Math.ceil(totalCups / 50);
+            packagingFee = packagingBoxes * 40000;
+          }
+          
+          // Add items with prices combined
+          confirmationText += `\n📦 **Items & Rincian Harga:**\n`;
+          calculation.itemDetails.forEach((detail) => {
+            if (detail.priceFound && detail.itemTotal > 0) {
+              const itemName = (detail.name || '').toLowerCase();
+              // Skip packaging items (we'll add calculated one below)
+              if (!itemName.includes('packaging') && !itemName.includes('styrofoam')) {
+                confirmationText += `• ${detail.quantity}x ${detail.name}: Rp ${formatPrice(detail.itemTotal)}\n`;
+              }
+            }
+          });
+          
+          // Add packaging with price if applicable
+          if (packagingFee > 0) {
+            confirmationText += `• ${packagingBoxes}x Packaging Styrofoam (50 cup): Rp ${formatPrice(packagingFee)}\n`;
+          }
+          
+          const subtotal = calculation.subtotal + packagingFee;
+          const deliveryFee = parseFloat(orderData.delivery_fee) || 0;
+          const grandTotal = subtotal + deliveryFee;
+          
+          confirmationText += `\n💰 Subtotal: Rp ${formatPrice(subtotal)}\n`;
+          if (deliveryFee > 0) {
+            confirmationText += `🚚 Ongkir: Rp ${formatPrice(deliveryFee)}\n`;
+          }
+          confirmationText += `💰 Total: Rp ${formatPrice(grandTotal)}\n`;
+          
+          // Add notes after totals (filter out packaging notes since they're already in Items section)
+          if (orderData.notes && orderData.notes.length > 0) {
+            const filteredNotes = orderData.notes.filter(note => {
+              const noteLower = (note || '').toLowerCase();
+              // Filter out packaging-related notes (already shown in Items section)
+              return !(noteLower.includes('packaging') && 
+                      (noteLower.includes('styrofoam') || noteLower.includes('ya') || noteLower.includes('yes')));
+            });
+            
+            if (filteredNotes.length > 0) {
+              confirmationText += `\n📝 **Notes:**\n`;
+              filteredNotes.forEach(note => {
+                confirmationText += `• ${note}\n`;
+              });
+            }
+          }
+          
+          confirmationText += `\nApakah pesanan ini sudah benar?\n`;
+          confirmationText += `Ketik "Ya" atau "Y" untuk konfirmasi, atau "Tidak" atau "T" untuk membatalkan.`;
 
-          // Create inline keyboard with Yes/No buttons
-          const replyMarkup = {
-            inline_keyboard: [
-              [
-                { text: '✅ Ya, Benar', callback_data: `confirm_order_${orderData.id}` },
-                { text: '❌ Tidak, Perbaiki', callback_data: `cancel_order_${orderData.id}` }
-              ]
-            ]
-          };
-
-          // Send confirmation message with buttons
-          await sendTelegramMessage(message.chat.id, confirmationText, replyMarkup);
+          // Send confirmation message without inline keyboard (manual response)
+          await sendTelegramMessage(message.chat.id, confirmationText);
           // orderProcessed already set above, but ensure it's still true
           orderProcessed = true;
-          console.log(`✅ [ORDER_HANDLER] Order confirmation sent (future date), orderProcessed=true, returning early`);
           return; // CRITICAL: Return immediately to prevent fall-through
         } else {
           // Save order to Google Sheets with status "pending_confirmation" (current date or past)
@@ -732,7 +729,6 @@ async function handleTelegramMessage(message) {
           // They are handled by the daily job (runDailyRemindersJob) which reads Orders once per day.
           // This reduces Google Sheets READ requests and avoids 429 rate limits.
           if (orderData.event_date) {
-            console.log(`ℹ️ [ORDER_CREATE] Reminder will be processed by daily job (event_date: ${orderData.event_date})`);
           }
 
           // Get price list and calculate order summary
@@ -740,34 +736,86 @@ async function handleTelegramMessage(message) {
           const orderSummary = formatOrderSummary(orderData);
           const calculation = calculateOrderTotal(orderData.items, priceList);
 
-          // Create confirmation message with order summary (without total - total shown in invoice after confirmation)
+          // Create confirmation message with order summary and price info
           let confirmationText = `📋 **KONFIRMASI PESANAN**\n\n`;
           confirmationText += orderSummary;
-          confirmationText += `\n\nApakah pesanan ini sudah benar?`;
+          
+          // Calculate packaging fee
+          let packagingFee = 0;
+          let packagingBoxes = 0;
+          const hasPackaging = orderData.notes?.some(note => 
+            note.toLowerCase().includes('packaging') && 
+            (note.toLowerCase().includes('ya') || note.toLowerCase().includes('yes'))
+          );
+          if (hasPackaging) {
+            const totalCups = orderData.items.reduce((sum, item) => {
+              const name = (item.name || '').toLowerCase();
+              if (name.includes('dawet') && (name.includes('small') || name.includes('medium') || name.includes('large')) && !name.includes('botol')) {
+                return sum + (item.quantity || 0);
+              }
+              return sum;
+            }, 0);
+            packagingBoxes = Math.ceil(totalCups / 50);
+            packagingFee = packagingBoxes * 40000;
+          }
+          
+          // Add items with prices combined
+          confirmationText += `\n📦 **Items & Rincian Harga:**\n`;
+          calculation.itemDetails.forEach((detail) => {
+            if (detail.priceFound && detail.itemTotal > 0) {
+              const itemName = (detail.name || '').toLowerCase();
+              // Skip packaging items (we'll add calculated one below)
+              if (!itemName.includes('packaging') && !itemName.includes('styrofoam')) {
+                confirmationText += `• ${detail.quantity}x ${detail.name}: Rp ${formatPrice(detail.itemTotal)}\n`;
+              }
+            }
+          });
+          
+          // Add packaging with price if applicable
+          if (packagingFee > 0) {
+            confirmationText += `• ${packagingBoxes}x Packaging Styrofoam (50 cup): Rp ${formatPrice(packagingFee)}\n`;
+          }
+          
+          const subtotal = calculation.subtotal + packagingFee;
+          const deliveryFee = parseFloat(orderData.delivery_fee) || 0;
+          const grandTotal = subtotal + deliveryFee;
+          
+          confirmationText += `\n💰 Subtotal: Rp ${formatPrice(subtotal)}\n`;
+          if (deliveryFee > 0) {
+            confirmationText += `🚚 Ongkir: Rp ${formatPrice(deliveryFee)}\n`;
+          }
+          confirmationText += `💰 Total: Rp ${formatPrice(grandTotal)}\n`;
+          
+          // Add notes after totals (filter out packaging notes since they're already in Items section)
+          if (orderData.notes && orderData.notes.length > 0) {
+            const filteredNotes = orderData.notes.filter(note => {
+              const noteLower = (note || '').toLowerCase();
+              // Filter out packaging-related notes (already shown in Items section)
+              return !(noteLower.includes('packaging') && 
+                      (noteLower.includes('styrofoam') || noteLower.includes('ya') || noteLower.includes('yes')));
+            });
+            
+            if (filteredNotes.length > 0) {
+              confirmationText += `\n📝 **Notes:**\n`;
+              filteredNotes.forEach(note => {
+                confirmationText += `• ${note}\n`;
+              });
+            }
+          }
+          
+          confirmationText += `\nApakah pesanan ini sudah benar?\n`;
+          confirmationText += `Ketik "Ya" atau "Y" untuk konfirmasi, atau "Tidak" atau "T" untuk membatalkan.`;
 
-          // Create inline keyboard with Yes/No buttons
-          const replyMarkup = {
-            inline_keyboard: [
-              [
-                { text: '✅ Ya, Benar', callback_data: `confirm_order_${orderData.id}` },
-                { text: '❌ Tidak, Perbaiki', callback_data: `cancel_order_${orderData.id}` }
-              ]
-            ]
-          };
-
-          // Send confirmation message with buttons
+          // Send confirmation message without inline keyboard (manual response)
           // Use reply_to_message_id for group chats to make it clear which order we're responding to
           const replyToId = message.chat.type !== 'private' ? message.message_id : null;
-          await sendTelegramMessage(message.chat.id, confirmationText, replyMarkup, replyToId);
+          await sendTelegramMessage(message.chat.id, confirmationText, null, replyToId);
           // orderProcessed already set above, but ensure it's still true
           orderProcessed = true;
-          logger.debug(`[ORDER_HANDLER] Order confirmation sent`);
           return; // CRITICAL: Return immediately to prevent fall-through
         }
       } else {
         // Order format detected but incomplete
-        console.log('⚠️ Order format detected but incomplete:', validation.errors);
-        
         // Always send helpful incomplete order message if it looks like an order attempt
         if (parsedOrder.customer_name || parsedOrder.phone_number || parsedOrder.items.length > 0) {
           const isEnglish = detectLanguage(message.text);
@@ -793,9 +841,7 @@ async function handleTelegramMessage(message) {
           
           const fullMessage = incompleteMessage + formatTemplate;
           await sendTelegramMessage(message.chat.id, fullMessage);
-          console.log('📤 [ORDER_HANDLER] Sent incomplete order guidance message');
           orderProcessed = true; // Mark as processed (even if incomplete)
-          console.log(`✅ [ORDER_HANDLER] Incomplete order handled, orderProcessed=true, returning early`);
           return; // CRITICAL: Return immediately to prevent fall-through
         }
       }
@@ -820,10 +866,7 @@ async function handleTelegramMessage(message) {
           // This is a parse error - not an order format, continue to other handlers
           // But only log if orderProcessed is still false (meaning it's truly not an order)
           if (!orderProcessed) {
-            logger.debug('[ORDER_PARSE] Not an order format or parse error, checking other handlers');
-            logger.warn('[ORDER_PARSE] Error:', error.message);
           } else {
-            logger.debug('[ORDER_PARSE] Order was processed despite error');
           }
         }
         }
@@ -831,12 +874,10 @@ async function handleTelegramMessage(message) {
     } else {
       // Group/supergroup: non-command messages are already filtered out above
       // This code path should not be reached, but log for safety
-      logger.debug(`[ORDER_PARSE] Skipping auto-parse in ${chatType}`);
     }
 
     // CRITICAL: Return early if order was processed to prevent fall-through to menu/FAQ
     if (orderProcessed) {
-      logger.debug('[ORDER_PARSE] Order processed, skipping menu/FAQ handlers');
       return; // Exit handler to prevent extra messages
     }
 
@@ -865,14 +906,11 @@ async function handleTelegramMessage(message) {
       // Handle FAQ questions (ONLY if not an order)
       // Double-check: if orderProcessed is true, skip FAQ
       if (!orderProcessed && isFAQQuestion(message.text)) {
-        logger.debug(`[FAQ_HANDLER] FAQ question detected`);
         const faqAnswer = getFAQAnswer(message.text);
         const replyToId = message.chat.type !== 'private' ? message.message_id : null;
         await sendTelegramMessage(message.chat.id, faqAnswer, null, replyToId);
-        console.log(`📤 [FAQ_HANDLER] FAQ answer sent`);
         return;
       } else if (orderProcessed) {
-        console.log(`⏸️ [FAQ_HANDLER] Skipped because order was processed`);
       }
       
       // Fallback: Send friendly message for unhandled messages (NEVER send location)
@@ -884,11 +922,8 @@ async function handleTelegramMessage(message) {
         
         await sendTelegramMessage(message.chat.id, fallbackMessage, null, replyToId);
         markFallbackSent(message.chat.id);
-        console.log('📤 [FALLBACK] Sent fallback message to user (no location)');
       } else if (orderProcessed) {
-        console.log('⏸️ [FALLBACK] Skipped because order was processed');
       } else {
-        console.log('⏸️ [FALLBACK] Skipped (cooldown active)');
       }
     }
   } catch (error) {
@@ -910,7 +945,6 @@ setInterval(() => {
   // In production, you might want to track timestamps
   if (before > 1000) {
     processedCallbacks.clear();
-    logger.debug(`[CALLBACK] Cleaned up processed callbacks cache`);
   }
 }, CALLBACK_CLEANUP_INTERVAL);
 
@@ -918,13 +952,9 @@ async function handleCallbackQuery(callbackQuery) {
   const { data, message, from, id: callbackId } = callbackQuery;
   const chatId = message.chat.id;
   const messageId = message.message_id;
-
-  logger.debug('[CALLBACK] Callback query received');
-
   // Check if this callback was already processed (prevent Telegram retries)
   const callbackKey = `${callbackId}_${data}`;
   if (processedCallbacks.has(callbackKey)) {
-    logger.debug(`[CALLBACK] Callback ${callbackId} already processed, ignoring duplicate`);
     // Still answer the callback to stop Telegram retry
     await answerCallbackQuery(callbackId);
     return;
@@ -936,42 +966,33 @@ async function handleCallbackQuery(callbackQuery) {
   try {
     // Answer callback query IMMEDIATELY to stop Telegram retry
     await answerCallbackQuery(callbackId);
-    logger.debug(`[CALLBACK] Answered callback query ${callbackId} immediately`);
-
     if (data.startsWith('confirm_order_')) {
       const orderId = data.replace('confirm_order_', '');
-      logger.debug(`[CALLBACK] Processing order confirmation for: ${orderId}`);
-      
       // Remove inline keyboard to prevent double-click
       try {
         await editMessageReplyMarkup(chatId, messageId, null);
-        logger.debug(`[CALLBACK] Removed inline keyboard for order ${orderId}`);
       } catch (error) {
-        logger.warn(`[CALLBACK] Could not remove keyboard (non-critical):`, error.message);
+        console.warn(`⚠️ [CALLBACK] Could not remove keyboard (non-critical):`, error.message);
       }
       
       await handleOrderConfirmation(chatId, orderId, messageId);
-      logger.debug(`[CALLBACK] Order confirmation completed for ${orderId}`);
       return; // CRITICAL: Return early to prevent any other processing
     } else if (data.startsWith('cancel_order_')) {
       const orderId = data.replace('cancel_order_', '');
-      logger.debug(`[CALLBACK] Processing order cancellation for: ${orderId}`);
-      
       // Remove inline keyboard
       try {
         await editMessageReplyMarkup(chatId, messageId, null);
       } catch (error) {
-        logger.warn(`[CALLBACK] Could not remove keyboard (non-critical):`, error.message);
+        console.warn(`⚠️ [CALLBACK] Could not remove keyboard (non-critical):`, error.message);
       }
       
       await handleOrderCancellation(chatId, orderId, messageId);
-      logger.debug(`[CALLBACK] Order cancellation completed for ${orderId}`);
       return; // CRITICAL: Return early
     } else {
-      logger.warn(`[CALLBACK] Unknown callback data: ${data}`);
     }
   } catch (error) {
-    logger.error('[CALLBACK] Error handling callback query:', error);
+    console.error('❌ [CALLBACK] Error handling callback query:', error);
+    console.error(`❌ [CALLBACK] Stack:`, error.stack);
     // Don't send error message to user to avoid "null" issues
   }
 }
@@ -1027,18 +1048,15 @@ function acquireOrderLock(orderId) {
   if (existingLock) {
     // Check if lock expired
     if (now - existingLock.timestamp < LOCK_TTL_MS) {
-      logger.debug(`[ORDER_LOCK] Order ${orderId} is already being processed (locked ${Math.floor((now - existingLock.timestamp) / 1000)}s ago)`);
       return false; // Lock still active
     } else {
       // Lock expired, remove it
       orderFinalizationLocks.delete(orderId);
-      logger.debug(`[ORDER_LOCK] Lock for order ${orderId} expired, removing`);
     }
   }
   
   // Acquire new lock
   orderFinalizationLocks.set(orderId, { timestamp: now });
-  logger.debug(`[ORDER_LOCK] Lock acquired for order ${orderId}`);
   return true;
 }
 
@@ -1048,7 +1066,6 @@ function acquireOrderLock(orderId) {
  */
 function releaseOrderLock(orderId) {
   orderFinalizationLocks.delete(orderId);
-  logger.debug(`[ORDER_LOCK] Lock released for order ${orderId}`);
 }
 
 /**
@@ -1064,7 +1081,6 @@ function cleanupExpiredLocks() {
     }
   }
   if (cleaned > 0) {
-    logger.debug(`[ORDER_LOCK] Cleaned up ${cleaned} expired lock(s)`);
   }
 }
 
@@ -1079,18 +1095,15 @@ setInterval(cleanupExpiredLocks, 5 * 60 * 1000);
  * @returns {Object} Finalized order data or null if not found/already confirmed
  */
 async function finalizeOrder(orderId) {
-  logger.debug(`[FINALIZE_ORDER] Starting finalization for order: ${orderId}`);
-  
   // Acquire lock to prevent concurrent processing
   if (!acquireOrderLock(orderId)) {
-    logger.debug(`[FINALIZE_ORDER] Order ${orderId} is already being processed, skipping duplicate finalization`);
     // Return existing order if available
     try {
       const { getOrderById } = await import('./google-sheets.js');
       const existingOrder = await getOrderById(orderId);
       return existingOrder;
     } catch (error) {
-      logger.error(`[FINALIZE_ORDER] Error getting existing order:`, error.message);
+      console.error(`❌ [FINALIZE_ORDER] Error getting existing order:`, error.message);
       return null;
     }
   }
@@ -1109,18 +1122,13 @@ async function finalizeOrder(orderId) {
     }
 
     if (!order) {
-      logger.warn(`[FINALIZE_ORDER] Order ${orderId} not found in Orders or WaitingList`);
       return null;
     }
 
     // Check if order is already confirmed (idempotency check)
     if (order.status === 'confirmed') {
-      logger.debug(`[FINALIZE_ORDER] Order ${orderId} is already confirmed, skipping duplicate finalization`);
       return order; // Return existing order
     }
-
-    logger.debug(`[FINALIZE_ORDER] Order ${orderId} found, status: ${order.status}, isWaitingList: ${isWaitingListOrder}`);
-
     // Normalize event_date to YYYY-MM-DD format before finalizing
     const { normalizeEventDate } = await import('./date-utils.js');
     if (order.event_date) {
@@ -1128,10 +1136,9 @@ async function finalizeOrder(orderId) {
         const originalEventDate = order.event_date;
         order.event_date = normalizeEventDate(order.event_date);
         if (order.event_date !== originalEventDate) {
-          logger.debug(`[FINALIZE_ORDER] Event date normalized: "${originalEventDate}" → "${order.event_date}"`);
         }
       } catch (error) {
-        logger.error(`[FINALIZE_ORDER] Failed to normalize event_date "${order.event_date}":`, error.message);
+        console.error(`❌ [FINALIZE_ORDER] Failed to normalize event_date "${order.event_date}":`, error.message);
         // Don't fail finalization, but log the error
       }
     }
@@ -1145,15 +1152,14 @@ async function finalizeOrder(orderId) {
         if (typeof originalDeliveryTime === 'string' && originalDeliveryTime.trim()) {
           order.delivery_time = normalizeDeliveryTime(originalDeliveryTime);
           if (order.delivery_time !== originalDeliveryTime) {
-            logger.debug(`[FINALIZE_ORDER] Delivery time normalized: "${originalDeliveryTime}" → "${order.delivery_time}"`);
           }
         } else {
           // Invalid or empty delivery_time, clear it
-          logger.warn(`[FINALIZE_ORDER] Invalid delivery_time format: "${originalDeliveryTime}", clearing it`);
+          console.warn(`⚠️ [FINALIZE_ORDER] Invalid delivery_time format: "${originalDeliveryTime}", clearing it`);
           order.delivery_time = '';
         }
       } catch (error) {
-        logger.error(`[FINALIZE_ORDER] Failed to normalize delivery_time "${order.delivery_time}":`, error.message);
+        console.error(`❌ [FINALIZE_ORDER] Failed to normalize delivery_time "${order.delivery_time}":`, error.message);
         // Clear invalid delivery_time to prevent issues in invoice formatting
         order.delivery_time = '';
       }
@@ -1162,33 +1168,27 @@ async function finalizeOrder(orderId) {
     // Update order status to "confirmed" in the appropriate sheet
     if (isWaitingListOrder) {
       await updateWaitingListOrderStatus(orderId, 'confirmed');
-      logger.debug(`[FINALIZE_ORDER] Updated WaitingList order status to confirmed`);
     } else {
       await updateOrderStatus(orderId, 'confirmed');
-      logger.debug(`[FINALIZE_ORDER] Updated Orders sheet order status to confirmed`);
     }
 
     // Ensure order exists in Orders sheet (UPSERT - update if exists, append if not)
     // saveOrder() now implements upsert internally, so we can call it safely
-    logger.debug(`[FINALIZE_ORDER] Upserting order ${orderId} to Orders sheet...`);
     order.status = 'confirmed';
     await saveOrder(order, { skipDuplicateCheck: true }); // skipDuplicateCheck because we have lock + upsert handles it
-    logger.debug(`[FINALIZE_ORDER] Order upserted to Orders sheet`);
 
     // NOTE: Reminders are NO LONGER created at order finalization time.
     // They are handled by the daily job (runDailyRemindersJob) which reads Orders once per day.
     // This reduces Google Sheets READ requests and avoids 429 rate limits.
     if (order.event_date) {
-      logger.debug(`[FINALIZE_ORDER] Reminder will be processed by daily job (event_date: ${order.event_date})`);
     }
 
     // Update order status in memory
     order.status = 'confirmed';
-    
-    logger.debug(`[FINALIZE_ORDER] Order ${orderId} finalized successfully`);
     return order;
   } catch (error) {
-    logger.error(`[FINALIZE_ORDER] Error finalizing order ${orderId}:`, error);
+    console.error(`❌ [FINALIZE_ORDER] Error finalizing order ${orderId}:`, error);
+    console.error(`❌ [FINALIZE_ORDER] Stack:`, error.stack);
     throw error;
   } finally {
     // Always release lock, even on error
@@ -1202,12 +1202,11 @@ async function finalizeOrder(orderId) {
  * All order finalization goes through finalizeOrder() which has locking
  */
 async function handleOrderConfirmation(chatId, orderId, messageId) {
-  logger.debug(`[ORDER_CONFIRM] Starting confirmation - Order ID: ${orderId}, Chat ID: ${chatId}, Message ID: ${messageId}`);
-  
   // Prevent duplicate processing (in-memory guard - additional safety)
-  const confirmationKey = `${orderId}_${messageId}`;
+  // For button clicks: use orderId + messageId
+  // For manual responses: use orderId only (invoice sent check will handle duplicates)
+  const confirmationKey = messageId ? `${orderId}_${messageId}` : orderId;
   if (processedConfirmations.has(confirmationKey)) {
-    logger.debug(`[ORDER_CONFIRM] Order confirmation already processed (in-memory), skipping: ${orderId}`);
     return;
   }
   processedConfirmations.add(confirmationKey);
@@ -1221,7 +1220,6 @@ async function handleOrderConfirmation(chatId, orderId, messageId) {
   // Additional guard: Check if invoice was already sent for this order (within last 10 seconds)
   const invoiceSent = sentInvoices.get(orderId);
   if (invoiceSent && (Date.now() - invoiceSent.sentAt) < 10000) {
-    logger.debug(`[ORDER_CONFIRM] Invoice already sent for order ${orderId} (within last 10s), skipping duplicate send`);
     return;
   }
 
@@ -1240,18 +1238,24 @@ async function handleOrderConfirmation(chatId, orderId, messageId) {
     const invoice = formatInvoice(order, priceList);
     const calculation = calculateOrderTotal(order.items, priceList);
 
-    // Remove inline keyboard only (keep original confirmation message intact)
-    await editMessageReplyMarkup(chatId, messageId, null);
+    // Remove inline keyboard only if messageId is provided (button click)
+    // For manual responses (Y/Ya), messageId will be null, so skip this
+    if (messageId) {
+      try {
+        await editMessageReplyMarkup(chatId, messageId, null);
+      } catch (error) {
+        console.warn(`⚠️ [ORDER_CONFIRM] Could not remove keyboard (non-critical):`, error.message);
+      }
+    }
 
     // Guard: Ensure invoice is valid before sending
     if (!invoice || typeof invoice !== 'string' || invoice.trim().length === 0) {
-      logger.error('[ORDER_CONFIRM] Invoice is invalid:', invoice);
+      console.error('❌ [ORDER_CONFIRM] Invoice is invalid:', invoice);
       await sendTelegramMessage(chatId, '❌ Terjadi kesalahan saat membuat invoice. Silakan hubungi admin.');
       return;
     }
 
     // Send invoice (ONLY ONCE) - This is the ONLY message sent on confirmation
-    logger.debug(`[CONFIRM] invoice=${orderId} sending=RECAP_ONLY`);
     await sendTelegramMessage(chatId, invoice);
     
     // Mark invoice as sent (with TTL for cleanup)
@@ -1268,11 +1272,10 @@ async function handleOrderConfirmation(chatId, orderId, messageId) {
     // NOTE: Payment notification (💰 PEMBAYARAN PENUH) is NOT sent during confirmation.
     // Payment reminders are handled separately by the reminder system (H-4, H-3, H-1).
     // The recap message already contains payment instructions, so no separate payment message is needed.
-    
-    logger.debug(`[ORDER_CONFIRM] Order ${orderId} confirmation completed successfully`);
     return; // CRITICAL: Return early to prevent any other processing
   } catch (error) {
-    logger.error('[ORDER_CONFIRM] Error confirming order:', error);
+    console.error('❌ [ORDER_CONFIRM] Error confirming order:', error);
+    console.error('❌ [ORDER_CONFIRM] Stack:', error.stack);
     await sendTelegramMessage(chatId, '❌ Terjadi kesalahan saat mengkonfirmasi pesanan. Silakan coba lagi.');
     return; // CRITICAL: Return early even on error
   }
@@ -1283,19 +1286,27 @@ async function handleOrderConfirmation(chatId, orderId, messageId) {
  */
 async function handleOrderCancellation(chatId, orderId, messageId) {
   try {
-    console.log('❌ Order cancelled:', orderId);
-
     // Update order status to "cancelled"
     await updateOrderStatus(orderId, 'cancelled');
 
-    // Edit the confirmation message
-    await editMessageText(
-      chatId,
-      messageId,
-      '❌ **Pesanan Dibatalkan**\n\nSilakan kirim ulang pesanan Anda dengan format yang benar.\n\nKetik /help untuk melihat format pesanan.'
-    );
+    // Edit the confirmation message only if messageId is provided (button click)
+    // For manual responses (T/Tidak), send a new message instead
+    if (messageId) {
+      await editMessageText(
+        chatId,
+        messageId,
+        '❌ **Pesanan Dibatalkan**\n\nSilakan kirim ulang pesanan Anda dengan format yang benar.\n\nKetik /help untuk melihat format pesanan.'
+      );
+    } else {
+      // Manual response - send cancellation message
+      await sendTelegramMessage(
+        chatId,
+        '❌ **Pesanan Dibatalkan**\n\nSilakan kirim ulang pesanan Anda dengan format yang benar.\n\nKetik /help untuk melihat format pesanan.'
+      );
+    }
   } catch (error) {
     console.error('❌ Error cancelling order:', error);
+    await sendTelegramMessage(chatId, '❌ Terjadi kesalahan saat membatalkan pesanan. Silakan coba lagi.');
   }
 }
 
@@ -1394,9 +1405,8 @@ async function editMessageReplyMarkup(chatId, messageId, replyMarkup = null) {
       },
       body: JSON.stringify(payload),
     });
-    logger.debug(`[EDIT_KEYBOARD] Removed inline keyboard from message: ${messageId}`);
   } catch (error) {
-    logger.error('[EDIT_KEYBOARD] Error editing message reply markup:', error);
+    console.error('❌ [EDIT_KEYBOARD] Error editing message reply markup:', error);
     // Non-critical, continue execution
   }
 }
@@ -1492,7 +1502,6 @@ async function handleTelegramCommand(message) {
   // Use update_id if available (from webhook context), otherwise use chatId:messageId
   const dedupeKey = message.update_id ? `update_${message.update_id}` : `${chatId}:${messageId}`;
   if (processedCommands.has(dedupeKey)) {
-    console.log(`[DEDUP] skip key=${dedupeKey} command="${messageText.substring(0, 20)}"`);
     return; // Already processed, skip
   }
   processedCommands.add(dedupeKey);
@@ -1508,11 +1517,9 @@ async function handleTelegramCommand(message) {
   const normalizedCommand = normalizeCommand(rawCommand);
   
   // Log command received
-  logger.debug(`[COMMAND] Received - command: "${normalizedCommand}", chatType: ${chatType}, chatId: ${chatId}, userId: ${userId}`);
   
   // If no valid command, handle as unknown
   if (!normalizedCommand) {
-    logger.debug(`[COMMAND] Invalid or empty command, treating as unknown`);
     sendTelegramMessage(chatId, '❌ Command tidak dikenali. Ketik /help untuk daftar perintah.');
     return;
   }
@@ -1531,22 +1538,17 @@ async function handleTelegramCommand(message) {
     case '/pesan':
       // Set state to AWAITING_FORM for this chat (if no payload)
       const currentState = getOrderState(chatId, userId, chatType);
-      
       // Check if payload exists (order form in same message)
       if (payload && payload.trim().length > 0) {
-        console.log(`🔍 [PESAN] Payload detected (${payload.length} chars), parsing order...`);
         
         // Clear any existing state (order is being processed)
         clearOrderState(chatId, userId, chatType);
         
         // Parse order from payload
         const detectedFormat = detectOrderFormat(payload);
-        console.log(`🔍 [PESAN] Detected format: ${detectedFormat || 'none'}`);
-        
         let parsedOrder;
         try {
           parsedOrder = parseOrderFromMessageAuto(payload);
-          logger.debug(`[PARSE] chat_id=${chatId} delivery_method="${parsedOrder.delivery_method || 'null'}"`);
         } catch (parseError) {
           // Handle parsing errors (e.g., invalid delivery_fee)
           if (parseError.field === 'delivery_fee' || parseError.field === 'shipping_fee') {
@@ -1569,9 +1571,6 @@ async function handleTelegramCommand(message) {
         const validation = validateOrder(parsedOrder);
         
         if (validation.valid) {
-          console.log(`✅ [PESAN] Valid order detected, processing...`);
-          console.log(`📊 [PESAN] Parsed items count: ${parsedOrder.items.length}`);
-          
           // Process order (similar to handleTelegramMessage order processing)
           const conversation = await getOrCreateConversation(
             chatId,
@@ -1592,15 +1591,11 @@ async function handleTelegramCommand(message) {
             delivery_time: parsedOrder.delivery_time,
             items: parsedOrder.items,
             notes: parsedOrder.notes,
-            delivery_fee: parsedOrder.delivery_fee !== null && parsedOrder.delivery_fee !== undefined ? parsedOrder.delivery_fee : 0, // Biaya Pengiriman (Ongkir) - default to 0 if not provided
+            delivery_fee: parsedOrder.delivery_fee !== null && parsedOrder.delivery_fee !== undefined ? parsedOrder.delivery_fee : null, // Biaya Pengiriman (Ongkir)
             delivery_method: parsedOrder.delivery_method || null, // Metode pengiriman (stored in Orders.delivery_method)
             status: 'pending',
             created_at: new Date().toISOString(),
           };
-          
-          logger.debug(`[TRACE assign] order.delivery_method="${orderData.delivery_method || 'null'}"`);
-          logger.debug(`[PARSE] chat_id=${chatId} delivery_method="${parsedOrder.delivery_method || 'null'}"`);
-          
           // Check if order date is in the future
           const isFuture = isFutureDate(orderData.event_date);
           
@@ -1614,21 +1609,69 @@ async function handleTelegramCommand(message) {
             const orderSummary = formatOrderSummary(orderData);
             const calculation = calculateOrderTotal(orderData.items, priceList);
             
+            // Create confirmation message with order summary and price info
             let confirmationText = `📋 **KONFIRMASI PESANAN**\n\n`;
             confirmationText += orderSummary;
-            confirmationText += `\n\nApakah pesanan ini sudah benar?`;
             
-            const replyMarkup = {
-              inline_keyboard: [
-                [
-                  { text: '✅ Ya, Benar', callback_data: `confirm_order_${orderData.id}` },
-                  { text: '❌ Tidak, Perbaiki', callback_data: `cancel_order_${orderData.id}` }
-                ]
-              ]
-            };
+            // Calculate packaging fee
+            let packagingFee = 0;
+            let packagingBoxes = 0;
+            const hasPackaging = orderData.notes?.some(note => 
+              note.toLowerCase().includes('packaging') && 
+              (note.toLowerCase().includes('ya') || note.toLowerCase().includes('yes'))
+            );
+            if (hasPackaging) {
+              const totalCups = orderData.items.reduce((sum, item) => {
+                const name = (item.name || '').toLowerCase();
+                if (name.includes('dawet') && (name.includes('small') || name.includes('medium') || name.includes('large')) && !name.includes('botol')) {
+                  return sum + (item.quantity || 0);
+                }
+                return sum;
+              }, 0);
+              packagingBoxes = Math.ceil(totalCups / 50);
+              packagingFee = packagingBoxes * 40000;
+            }
+            
+            // Add items with prices combined
+            confirmationText += `\n📦 **Items & Rincian Harga:**\n`;
+            calculation.itemDetails.forEach((detail) => {
+              if (detail.priceFound && detail.itemTotal > 0) {
+                const itemName = (detail.name || '').toLowerCase();
+                // Skip packaging items (we'll add calculated one below)
+                if (!itemName.includes('packaging') && !itemName.includes('styrofoam')) {
+                  confirmationText += `• ${detail.quantity}x ${detail.name}: Rp ${formatPrice(detail.itemTotal)}\n`;
+                }
+              }
+            });
+            
+            // Add packaging with price if applicable
+            if (packagingFee > 0) {
+              confirmationText += `• ${packagingBoxes}x Packaging Styrofoam (50 cup): Rp ${formatPrice(packagingFee)}\n`;
+            }
+            
+            const subtotal = calculation.subtotal + packagingFee;
+            const deliveryFee = parseFloat(orderData.delivery_fee) || 0;
+            const grandTotal = subtotal + deliveryFee;
+            
+            confirmationText += `\n💰 Subtotal: Rp ${formatPrice(subtotal)}\n`;
+            if (deliveryFee > 0) {
+              confirmationText += `🚚 Ongkir: Rp ${formatPrice(deliveryFee)}\n`;
+            }
+            confirmationText += `💰 Total: Rp ${formatPrice(grandTotal)}\n`;
+            
+            // Add notes after totals
+            if (orderData.notes && orderData.notes.length > 0) {
+              confirmationText += `\n📝 **Notes:**\n`;
+              orderData.notes.forEach(note => {
+                confirmationText += `• ${note}\n`;
+              });
+            }
+            
+            confirmationText += `\nApakah pesanan ini sudah benar?\n`;
+            confirmationText += `Ketik "Ya" atau "Y" untuk konfirmasi, atau "Tidak" atau "T" untuk membatalkan.`;
             
             const replyToId = chatType !== 'private' ? message.message_id : null;
-            await sendTelegramMessage(chatId, confirmationText, replyMarkup, replyToId);
+            await sendTelegramMessage(chatId, confirmationText, null, replyToId);
           } else {
             // Save order to Google Sheets with status "pending_confirmation" (current date or past)
             orderData.status = 'pending_confirmation';
@@ -1638,25 +1681,72 @@ async function handleTelegramCommand(message) {
             const orderSummary = formatOrderSummary(orderData);
             const calculation = calculateOrderTotal(orderData.items, priceList);
             
+            // Create confirmation message with order summary and price info
             let confirmationText = `📋 **KONFIRMASI PESANAN**\n\n`;
             confirmationText += orderSummary;
-            confirmationText += `\n\nApakah pesanan ini sudah benar?`;
             
-            const replyMarkup = {
-              inline_keyboard: [
-                [
-                  { text: '✅ Ya, Benar', callback_data: `confirm_order_${orderData.id}` },
-                  { text: '❌ Tidak, Perbaiki', callback_data: `cancel_order_${orderData.id}` }
-                ]
-              ]
-            };
+            // Calculate packaging fee
+            let packagingFee = 0;
+            let packagingBoxes = 0;
+            const hasPackaging = orderData.notes?.some(note => 
+              note.toLowerCase().includes('packaging') && 
+              (note.toLowerCase().includes('ya') || note.toLowerCase().includes('yes'))
+            );
+            if (hasPackaging) {
+              const totalCups = orderData.items.reduce((sum, item) => {
+                const name = (item.name || '').toLowerCase();
+                if (name.includes('dawet') && (name.includes('small') || name.includes('medium') || name.includes('large')) && !name.includes('botol')) {
+                  return sum + (item.quantity || 0);
+                }
+                return sum;
+              }, 0);
+              packagingBoxes = Math.ceil(totalCups / 50);
+              packagingFee = packagingBoxes * 40000;
+            }
+            
+            // Add items with prices combined
+            confirmationText += `\n📦 **Items & Rincian Harga:**\n`;
+            calculation.itemDetails.forEach((detail) => {
+              if (detail.priceFound && detail.itemTotal > 0) {
+                const itemName = (detail.name || '').toLowerCase();
+                // Skip packaging items (we'll add calculated one below)
+                if (!itemName.includes('packaging') && !itemName.includes('styrofoam')) {
+                  confirmationText += `• ${detail.quantity}x ${detail.name}: Rp ${formatPrice(detail.itemTotal)}\n`;
+                }
+              }
+            });
+            
+            // Add packaging with price if applicable
+            if (packagingFee > 0) {
+              confirmationText += `• ${packagingBoxes}x Packaging Styrofoam (50 cup): Rp ${formatPrice(packagingFee)}\n`;
+            }
+            
+            const subtotal = calculation.subtotal + packagingFee;
+            const deliveryFee = parseFloat(orderData.delivery_fee) || 0;
+            const grandTotal = subtotal + deliveryFee;
+            
+            confirmationText += `\n💰 Subtotal: Rp ${formatPrice(subtotal)}\n`;
+            if (deliveryFee > 0) {
+              confirmationText += `🚚 Ongkir: Rp ${formatPrice(deliveryFee)}\n`;
+            }
+            confirmationText += `💰 Total: Rp ${formatPrice(grandTotal)}\n`;
+            
+            // Add notes after totals
+            if (orderData.notes && orderData.notes.length > 0) {
+              confirmationText += `\n📝 **Notes:**\n`;
+              orderData.notes.forEach(note => {
+                confirmationText += `• ${note}\n`;
+              });
+            }
+            
+            confirmationText += `\nApakah pesanan ini sudah benar?\n`;
+            confirmationText += `Ketik "Ya" atau "Y" untuk konfirmasi, atau "Tidak" atau "T" untuk membatalkan.`;
             
             const replyToId = chatType !== 'private' ? message.message_id : null;
-            await sendTelegramMessage(chatId, confirmationText, replyMarkup, replyToId);
+            await sendTelegramMessage(chatId, confirmationText, null, replyToId);
           }
         } else {
           // Invalid order - send error with missing fields
-          console.log(`⚠️ [PESAN] Order validation failed:`, validation.errors);
           const errorMessage = `❌ **Format pesanan belum lengkap**\n\n` +
             `Kesalahan:\n${validation.errors.map(e => `• ${e}`).join('\n')}\n\n` +
             `Silakan perbaiki dan coba lagi.\n` +
@@ -1714,14 +1804,13 @@ async function handleTelegramCommand(message) {
       break;
     // Admin commands (PRD requirements)
     case '/new_order':
-      logger.debug(`[COMMAND] /new_order`);
       handleNewOrder(chatId, userId, sendTelegramMessage).catch(error => {
-        logger.error('[COMMAND] Error in /new_order handler:', error);
+        console.error('❌ [COMMAND] Error in /new_order handler:', error);
+        console.error('❌ [COMMAND] Stack:', error.stack);
         sendTelegramMessage(chatId, '❌ Maaf, ada error saat memproses perintah ini. Coba lagi ya.');
       });
       break;
     case '/parse_order':
-      logger.debug(`[COMMAND] /parse_order`);
       const replyToMessage = message.reply_to_message;
       handleParseOrder(chatId, userId, messageText, sendTelegramMessage, replyToMessage).catch(error => {
         console.error('❌ [COMMAND] Error in /parse_order handler:', error);
@@ -1731,9 +1820,17 @@ async function handleTelegramCommand(message) {
       break;
     case '/order_detail': {
       const orderId = args[0];
-      logger.debug(`[COMMAND] /order_detail - orderId: ${orderId || 'MISSING'}`);
       handleOrderDetail(chatId, userId, orderId, sendTelegramMessage).catch(error => {
         console.error('❌ [COMMAND] Error in /order_detail handler:', error);
+        console.error('❌ [COMMAND] Stack:', error.stack);
+        sendTelegramMessage(chatId, '❌ Maaf, ada error saat memproses perintah ini. Coba lagi ya.');
+      });
+      break;
+    }
+    case '/edit': {
+      const replyToMessage = message.reply_to_message;
+      handleEditOrder(chatId, userId, messageText, sendTelegramMessage, replyToMessage).catch(error => {
+        console.error('❌ [COMMAND] Error in /edit handler:', error);
         console.error('❌ [COMMAND] Stack:', error.stack);
         sendTelegramMessage(chatId, '❌ Maaf, ada error saat memproses perintah ini. Coba lagi ya.');
       });
@@ -1759,7 +1856,6 @@ async function handleTelegramCommand(message) {
       break;
     }
     case '/today_reminder': {
-      logger.debug(`[COMMAND] /today_reminder`);
       isAdmin(userId).then(async (isUserAdmin) => {
         if (isUserAdmin) {
           await checkAndSendRemindersForToday(sendTelegramMessage);
@@ -1775,7 +1871,6 @@ async function handleTelegramCommand(message) {
       break;
     }
     case '/admin_auth': {
-      logger.debug(`[COMMAND] /admin_auth`);
       handleAdminAuth(chatId, userId, messageText, sendTelegramMessage).catch(error => {
         console.error('❌ [COMMAND] Error in /admin_auth handler:', error);
         console.error('❌ [COMMAND] Stack:', error.stack);
@@ -1784,7 +1879,6 @@ async function handleTelegramCommand(message) {
       break;
     }
     case '/recap_h1': {
-      logger.debug(`[COMMAND] /recap_h1`);
       handleRecapH1(chatId, userId, sendTelegramMessage).catch(error => {
         console.error('❌ [COMMAND] Error in /recap_h1 handler:', error);
         console.error('❌ [COMMAND] Stack:', error.stack);
@@ -1794,7 +1888,6 @@ async function handleTelegramCommand(message) {
     }
     case '/orders_date': {
       const dateStr = args[0];
-      logger.debug(`[COMMAND] /orders_date - dateStr: "${dateStr}"`);
       if (!dateStr) {
         sendTelegramMessage(chatId, '❌ Format: /orders_date YYYY-MM-DD\n\nContoh: /orders_date 2026-01-18\nAtau gunakan: /orders_today, /orders_tomorrow');
         break;
@@ -1807,15 +1900,14 @@ async function handleTelegramCommand(message) {
       break;
     }
     case '/orders_today': {
-      logger.debug(`[COMMAND] /orders_today`);
       handleOrdersDate(chatId, userId, 'today', sendTelegramMessage).catch(error => {
-        logger.error('[COMMAND] Error in /orders_today handler:', error);
+        console.error('❌ [COMMAND] Error in /orders_today handler:', error);
+        console.error('❌ [COMMAND] Stack:', error.stack);
         sendTelegramMessage(chatId, '❌ Maaf, ada error saat memproses perintah ini. Coba lagi ya.');
       });
       break;
     }
     case '/orders_tomorrow': {
-      logger.debug(`[COMMAND] /orders_tomorrow`);
       handleOrdersDate(chatId, userId, 'tomorrow', sendTelegramMessage).catch(error => {
         console.error('❌ [COMMAND] Error in /orders_tomorrow handler:', error);
         console.error('❌ [COMMAND] Stack:', error.stack);
@@ -1825,7 +1917,6 @@ async function handleTelegramCommand(message) {
     }
     default:
       // Unknown command - respond with friendly message
-      logger.debug(`[COMMAND] Unknown command: "${normalizedCommand}"`);
       sendTelegramMessage(chatId, '❌ Command tidak dikenali. Ketik /help untuk daftar perintah.');
       break;
   }
@@ -1842,9 +1933,6 @@ app.post('/api/messages/send', async (req, res) => {
     if (!chatId || !text) {
       return res.status(400).json({ error: 'Missing "chatId" or "text" field' });
     }
-
-    logger.debug('📤 Sending Telegram message:', { chatId, text });
-
     // Send message via Telegram Bot API
     const result = await sendTelegramMessage(chatId, text);
 
@@ -1867,8 +1955,6 @@ app.post('/api/messages/send', async (req, res) => {
     };
 
     await saveMessage(messageData);
-    console.log('💾 Sent message saved to database');
-
     res.json({
       success: true,
       messageId: result.message_id,
@@ -2040,7 +2126,6 @@ async function sendTelegramMessage(chatId, text, replyMarkup = null, replyToMess
           throw new Error(`Telegram API error: ${retryData.description}`);
         }
         
-        logger.debug('Telegram message sent successfully (as plain text after markdown error)');
         return retryData.result;
       }
       
@@ -2087,14 +2172,11 @@ async function sendTelegramMessage(chatId, text, replyMarkup = null, replyToMess
           throw new Error(`Telegram API error: ${retryData.description}`);
         }
         
-        logger.debug('Telegram message sent successfully (as plain text after markdown error)');
         return retryData.result;
       }
       
       throw new Error(`Telegram API error: ${data.description}`);
     }
-
-    logger.debug('Telegram message sent successfully');
     return data.result;
   } catch (error) {
     // If it's a markdown parsing error, try one more time as plain text
@@ -2133,7 +2215,6 @@ async function sendTelegramMessage(chatId, text, replyMarkup = null, replyToMess
         throw new Error(`Telegram API error: ${retryData.description}`);
       }
       
-      logger.debug('✅ Telegram message sent successfully (as plain text after markdown error):', retryData.result);
       return retryData.result;
     }
     
@@ -2277,7 +2358,6 @@ app.get('/api/orders/:id', async (req, res) => {
     // Normalize order_id for lookup
     const { normalizeOrderId } = await import('./google-sheets.js');
     const normalizedOrderId = normalizeOrderId(orderId);
-    console.log(`🔍 [API_ORDER_DETAIL] Looking up order_id: "${normalizedOrderId}" (original: "${orderId}")`);
     
     const orders = await getAllOrders(1000);
     const order = orders.find(o => {
@@ -2286,7 +2366,6 @@ app.get('/api/orders/:id', async (req, res) => {
     });
     
     if (!order) {
-      console.log(`⚠️ [API_ORDER_DETAIL] Order ${normalizedOrderId} not found`);
       return res.status(404).json({ error: 'Order not found' });
     }
     
@@ -2321,9 +2400,6 @@ app.get('/api/orders/:id', async (req, res) => {
       payment_status: paymentStatus,
       remaining_balance: remainingBalance,
     };
-    
-    console.log(`✅ [API_ORDER_DETAIL] Order found with pricing: total_amount=${orderWithPricing.total_amount}, paid_amount=${orderWithPricing.paid_amount}, payment_status=${orderWithPricing.payment_status}`);
-    
     res.json({ order: orderWithPricing });
   } catch (error) {
     console.error('❌ Error getting order:', error);
@@ -2384,9 +2460,7 @@ app.patch('/api/orders/:id/status', async (req, res) => {
     try {
       await updateOrderStatus(orderId, status);
       orderUpdated = true;
-      console.log(`✅ Order ${orderId} status updated to ${status} in Orders sheet`);
     } catch (error) {
-      console.log(`⚠️  Order ${orderId} not found in Orders sheet, checking WaitingList...`);
     }
     
     // Also try to update in WaitingList (order might be in both)
@@ -2394,9 +2468,7 @@ app.patch('/api/orders/:id/status', async (req, res) => {
       await updateWaitingListOrderStatus(orderId, status);
       if (!orderUpdated) {
         orderUpdated = true;
-        console.log(`✅ Order ${orderId} status updated to ${status} in WaitingList sheet`);
       } else {
-        console.log(`✅ Order ${orderId} status also updated in WaitingList sheet`);
       }
     } catch (error) {
       // Order not in WaitingList, that's okay if it was in Orders
@@ -2428,9 +2500,7 @@ app.patch('/api/orders/:id/status', async (req, res) => {
         if (telegramChatId) {
           const notificationMessage = getStatusNotificationMessage(status, order);
           await sendTelegramMessage(telegramChatId, notificationMessage);
-          logger.debug(`📬 Status notification sent to customer for order ${orderId}`);
         } else {
-          logger.debug(`⚠️  Could not send notification for order ${orderId}: No Telegram chat ID found`);
         }
       } catch (error) {
         console.error(`❌ Error sending status notification for order ${orderId}:`, error);
@@ -2500,8 +2570,6 @@ async function findDeliveringOrdersForCustomer(conversationId) {
  */
 async function handleCustomerOrderCompletion(chatId, customerTelegramId, messageText) {
   try {
-    logger.debug('🔍 Customer completion request:', { chatId, customerTelegramId, messageText });
-
     // Get conversation to find customer's orders
     const conversation = await getOrCreateConversation(
       chatId,
@@ -2516,8 +2584,6 @@ async function handleCustomerOrderCompletion(chatId, customerTelegramId, message
 
     if (explicitOrderId) {
       // Case A: Explicit order ID provided
-      console.log(`📋 Explicit order ID found: ${explicitOrderId}`);
-      
       // Get the specific order
       const allOrders = await getAllOrders(1000);
       let order = allOrders.find(o => o.id === explicitOrderId);
@@ -2551,11 +2617,6 @@ async function handleCustomerOrderCompletion(chatId, customerTelegramId, message
           chatId,
           '❌ Anda tidak memiliki izin untuk menyelesaikan pesanan ini.'
         );
-        console.log('⚠️  Customer identity mismatch:', {
-          orderId: explicitOrderId,
-          orderConversationId: order.conversation_id,
-          customerConversationId: conversation.id
-        });
         return;
       }
 
@@ -2576,7 +2637,6 @@ async function handleCustomerOrderCompletion(chatId, customerTelegramId, message
       if (deliveringOrders.length === 1) {
         // Exactly one delivering order - complete it
         orderToComplete = deliveringOrders[0];
-        console.log(`✅ Found single delivering order: ${orderToComplete.id}`);
       } else {
         // Multiple delivering orders - ask user to specify
         const orderList = deliveringOrders.map(order => 
@@ -2601,23 +2661,16 @@ async function handleCustomerOrderCompletion(chatId, customerTelegramId, message
         chatId,
         '❌ Anda tidak memiliki izin untuk menyelesaikan pesanan ini.'
       );
-      console.log('⚠️  Customer identity mismatch:', {
-        orderId: orderToComplete.id,
-        orderConversationId: orderToComplete.conversation_id,
-        customerConversationId: conversation.id
-      });
       return;
     }
 
     // Update order status to completed
     try {
       await updateOrderStatus(orderToComplete.id, 'completed');
-      console.log(`✅ Order ${orderToComplete.id} marked as completed by customer`);
     } catch (error) {
       // Try waiting list if not in orders
       try {
         await updateWaitingListOrderStatus(orderToComplete.id, 'completed');
-        console.log(`✅ Order ${orderToComplete.id} marked as completed in waiting list`);
       } catch (err) {
         throw error; // Throw original error
       }
@@ -2631,8 +2684,6 @@ async function handleCustomerOrderCompletion(chatId, customerTelegramId, message
       `Pesanan telah ditandai sebagai selesai.\n\n` +
       `Terima kasih atas kepercayaan Anda! 🙏`
     );
-
-    logger.debug(`✅ Customer ${chatId} completed order ${orderToComplete.id}`);
   } catch (error) {
     console.error('❌ Error handling customer order completion:', error);
     await sendTelegramMessage(
@@ -2769,32 +2820,71 @@ app.get('*', (req, res) => {
   });
 });
 
+/**
+ * Kill process using the specified port (Windows)
+ * This prevents EADDRINUSE errors when restarting the server
+ */
+async function killProcessOnPort(port) {
+  try {
+    // Find process using the port
+    const { stdout } = await execAsync(`netstat -ano | findstr :${port}`);
+    
+    if (!stdout || stdout.trim().length === 0) {
+      // No process using the port
+      return;
+    }
+    
+    // Extract PID from netstat output
+    // Format: TCP    0.0.0.0:3001           0.0.0.0:0              LISTENING       14312
+    const lines = stdout.trim().split('\n');
+    const pids = new Set();
+    
+    for (const line of lines) {
+      const match = line.match(/\s+LISTENING\s+(\d+)/);
+      if (match && match[1]) {
+        pids.add(match[1]);
+      }
+    }
+    
+    // Kill all processes using the port
+    for (const pid of pids) {
+      try {
+        await execAsync(`taskkill /PID ${pid} /F`);
+      } catch (error) {
+        // Process might already be gone, ignore
+        if (!error.message.includes('not found')) {
+          console.warn(`⚠️  Could not kill process ${pid}:`, error.message);
+        }
+      }
+    }
+    
+    // Wait a moment for port to be released
+    await new Promise(resolve => setTimeout(resolve, 500));
+  } catch (error) {
+    // If netstat fails (e.g., no process found), that's fine
+    if (!error.message.includes('findstr')) {
+      console.warn(`⚠️  Could not check port ${port}:`, error.message);
+    }
+  }
+}
+
 // Start server
-app.listen(PORT, async () => {
-  const renderUrl = process.env.RENDER_EXTERNAL_URL || process.env.WEBHOOK_URL || 'missing';
-  const mode = process.env.NODE_ENV === 'production' ? 'webhook' : 'polling';
-  logger.debug(`[BOOT] render_url=${renderUrl}`);
+(async () => {
+  // Kill any existing process on the port before starting
+  await killProcessOnPort(PORT);
   
-  logger.info(`Server running on port ${PORT}`);
-  
+  app.listen(PORT, async () => {
   try {
     // Initialize Google Sheets
     await initializeStorage();
-    logger.info(`Google Sheets ready`);
   } catch (error) {
-    logger.error('Google Sheets initialization failed:', error.message);
-    console.log(`   Make sure GOOGLE_SERVICE_ACCOUNT_KEY_FILE and GOOGLE_SPREADSHEET_ID are set in .env`);
-    console.log(`   Continuing without storage (messages stored in memory only)`);
+    console.error(`⚠️  Google Sheets initialization failed:`, error.message);
   }
   
   // Start polling only in development mode
   // In production, use webhook instead
   if (process.env.NODE_ENV === 'production') {
-    console.log(`\n🌐 Production mode: Using webhook (polling disabled)`);
-    // Automatically set webhook in production
-    await setWebhook();
   } else {
-    logger.info('Development mode: Starting polling...');
     startPolling();
   }
   
@@ -2804,22 +2894,21 @@ app.listen(PORT, async () => {
   // Initialize Reminders sheet
   try {
     await ensureRemindersSheet();
-    logger.info('Reminders sheet ready');
   } catch (error) {
-    logger.error('Reminders sheet initialization failed:', error.message);
+    console.error('⚠️ Reminders sheet initialization failed:', error.message);
   }
   
   // Ensure Orders sheet has payment headers
   try {
     await ensureOrdersPaymentHeaders();
-    logger.info('Orders payment headers ready');
   } catch (error) {
-    logger.error('Orders payment headers initialization failed:', error.message);
+    console.error('⚠️ Orders payment headers initialization failed:', error.message);
   }
   
   // Start reminder scheduler (check every 6 hours)
   startReminderScheduler();
-});
+  });
+})();
 
 /**
  * Get next 7 AM Jakarta time
@@ -2873,8 +2962,6 @@ function getNext7AMJakarta() {
  * Schedules reminders to run at 7 AM Jakarta time every day
  */
 function startReminderScheduler() {
-  logger.debug('[REMINDER_SCHEDULER] Initializing reminder scheduler...');
-  
   // Function to schedule next run
   const scheduleNextRun = () => {
     // Calculate time until next 7 AM Jakarta
@@ -2889,12 +2976,9 @@ function startReminderScheduler() {
       timeStyle: 'long'
     });
     
-    logger.info(`[REMINDER_SCHEDULER] Next reminder run scheduled for: ${nextRunStr} (Jakarta time)`);
-    logger.debug(`[REMINDER_SCHEDULER] Time until next run: ${Math.floor(msUntil7AM / 1000 / 60)} minutes`);
     
     // Schedule run at 7 AM
     setTimeout(() => {
-      logger.info('[REMINDER_SCHEDULER] Running scheduled reminder job at 7 AM Jakarta time');
       runDailyRemindersJob(sendTelegramMessage);
       
       // Schedule next run (recursive)
@@ -2905,7 +2989,6 @@ function startReminderScheduler() {
   // Start scheduling
   scheduleNextRun();
   
-  logger.info('[REMINDER_SCHEDULER] Reminder scheduler started (runs daily at 7 AM Jakarta time)');
 }
 
 /**
@@ -2913,15 +2996,12 @@ function startReminderScheduler() {
  */
 async function checkAndSendReminders() {
   try {
-    console.log('🔄 Checking waiting list for due orders...');
     const dueOrders = await checkWaitingList();
     
     if (dueOrders.length === 0) {
-      console.log('✅ No orders due today');
       return;
     }
     
-    console.log(`📬 Found ${dueOrders.length} order(s) due today`);
     
     for (const order of dueOrders) {
       // Send reminder message
@@ -2943,9 +3023,6 @@ async function checkAndSendReminders() {
       
       // TODO: Send to admin/owner (for now, just log)
       // In future, can send to admin Telegram chat or email
-      console.log(`📬 Reminder for order ${order.id}:`);
-      console.log(reminderMessage);
-      
       // Mark reminder as sent
       await markReminderSent(order.id);
       
@@ -2953,7 +3030,6 @@ async function checkAndSendReminders() {
       // You can implement this if needed
     }
     
-    console.log(`✅ Sent ${dueOrders.length} reminder(s)`);
   } catch (error) {
     console.error('❌ Error checking waiting list:', error);
   }
@@ -2971,12 +3047,10 @@ function startWaitingListChecker() {
     checkAndSendReminders();
   }, 60 * 60 * 1000); // 1 hour
   
-  console.log('✅ Waiting list checker started (checks every hour)');
 }
 
 // Cleanup on exit
 process.on('SIGINT', () => {
-  console.log('\n👋 Shutting down...');
   stopPolling();
   process.exit(0);
 });

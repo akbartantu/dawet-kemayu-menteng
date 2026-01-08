@@ -91,6 +91,7 @@ export async function formatMenuMessage() {
       // CRITICAL: Use item_name as unique key to prevent duplicates
       // If we've already seen this item_name, skip it (prevent duplicates)
       if (seenItemNames.has(itemName)) {
+        console.warn(`⚠️ [MENU] Duplicate item_name skipped: "${itemName}" (item_code: "${itemCode}")`);
         continue;
       }
       seenItemNames.add(itemName);
@@ -191,6 +192,8 @@ export async function formatMenuMessage() {
     
     return menu;
   } catch (error) {
+    console.error('❌ Error generating menu:', error.message);
+    console.error('❌ Stack:', error.stack);
     // Fallback to simple message
     return `📋 MENU DAWET KEMAYU MENTENG\n\nMenu sedang dalam proses update. Silakan hubungi admin.\n\n💡 Cara Pesan\nKirim pesanan dengan format:\nNama: [Nama Anda]\nNo hp: [Nomor HP]\nAlamat: [Alamat]\nDetail pesanan:\n- [Jumlah] x [Nama Item]\n\nKetik /help untuk contoh lengkap`;
   }
@@ -230,6 +233,7 @@ function formatMenuFromPriceList(priceList) {
     
     // Only process if we haven't seen this item name before (prevent duplicates)
     if (seenItems.has(itemKey)) {
+      console.warn(`⚠️ [MENU_FALLBACK] Duplicate item skipped: "${itemKey}"`);
       continue;
     }
     seenItems.add(itemKey);

@@ -128,6 +128,7 @@ export async function createCalendarEvent(order) {
       startDateTime = parsed.startDateTime;
       endDateTime = parsed.endDateTime;
     } catch (error) {
+      console.error(`❌ Error parsing date/time for order ${order.id}:`, error.message);
       return null;
     }
 
@@ -164,9 +165,9 @@ export async function createCalendarEvent(order) {
     });
 
     const eventId = response.data.id;
-    
     return eventId;
   } catch (error) {
+    console.error(`❌ Error creating calendar event for order ${order.id}:`, error.message);
     // Don't throw - allow order saving to continue
     return null;
   }
@@ -201,6 +202,7 @@ export async function updateCalendarEvent(eventId, order) {
       startDateTime = parsed.startDateTime;
       endDateTime = parsed.endDateTime;
     } catch (error) {
+      console.error(`❌ Error parsing date/time for order ${order.id}:`, error.message);
       return eventId; // Return existing event ID
     }
 
@@ -236,7 +238,6 @@ export async function updateCalendarEvent(eventId, order) {
       eventId: eventId,
       requestBody: event,
     });
-
     return eventId;
   } catch (error) {
     // If event not found, try creating new one
@@ -244,6 +245,7 @@ export async function updateCalendarEvent(eventId, order) {
       return await createCalendarEvent(order);
     }
     
+    console.error(`❌ Error updating calendar event for order ${order.id}:`, error.message);
     return eventId; // Return existing event ID on error
   }
 }
@@ -273,7 +275,6 @@ export async function deleteCalendarEvent(eventId, orderId) {
       calendarId: CALENDAR_ID,
       eventId: eventId,
     });
-
     return true;
   } catch (error) {
     // If event not found, that's okay (already deleted)
@@ -281,6 +282,7 @@ export async function deleteCalendarEvent(eventId, orderId) {
       return true;
     }
     
+    console.error(`❌ Error deleting calendar event for order ${orderId}:`, error.message);
     return false;
   }
 }

@@ -127,12 +127,12 @@ export function extractDeliveryTimeFromMessage(messageText) {
   if (!cleanedToken) {
     return null;
   }
-
   // Step 4: Normalize using normalizeDeliveryTime()
   try {
     const normalized = normalizeDeliveryTime(cleanedToken);
     return normalized;
   } catch (error) {
+    console.warn(`⚠️ [PARSE] Failed to normalize delivery_time "${cleanedToken}":`, error.message);
     return null;
   }
 }
@@ -150,8 +150,8 @@ export function parseOrderFromMessage(messageText) {
   const normalizedText = normalizeText(messageText);
   const rawLength = messageText ? messageText.length : 0;
   const normalizedLength = normalizedText.length;
-  
-  // Text normalization complete
+  if (rawLength !== normalizedLength) {
+  }
 
   const order = {
     customer_name: null,
@@ -164,9 +164,8 @@ export function parseOrderFromMessage(messageText) {
     delivery_time: null,
     items: [],
     notes: [],
-    delivery_fee: null, // Biaya Pengiriman (Ongkir) - canonical field for Google Sheets
-    delivery_fee_source: null, // 'USER_INPUT', 'USER_EMPTY', 'NOT_PROVIDED'
-    delivery_method: null, // Metode pengiriman - FIRST-CLASS FIELD (not in notes)
+    shipping_fee: null, // Biaya Pengiriman (Ongkir) - canonical field
+    shipping_fee_source: null, // 'USER_INPUT', 'USER_EMPTY', 'NOT_PROVIDED'
   };
 
   const lines = normalizedText.split('\n').map(line => line.trim()).filter(line => line);
@@ -360,7 +359,6 @@ export function parseOrderFromMessage(messageText) {
       
       // Normalize multiple spaces to single space
       method = method.replace(/\s+/g, ' ');
-      
       if (!method || method === '-') {
         order.delivery_method = '-';
       } else {
@@ -434,7 +432,6 @@ export function parseOrderFromMessage(messageText) {
             quantity: quantity,
             name: itemName,
           });
-          console.log(`✅ [PARSE_V1] Extracted item: ${quantity}x ${itemName}`);
           continue;
         }
       }
@@ -457,19 +454,14 @@ export function parseOrderFromMessage(messageText) {
   }
 
   // Set delivery_fee_source if not provided (V1 format doesn't have Biaya Pengiriman field)
-  // Default to 0 (not null) to ensure it's always a number
   if (order.delivery_fee_source === null) {
-    if (order.delivery_fee === null || order.delivery_fee === undefined) {
-      order.delivery_fee = 0;
-      order.delivery_fee_source = 'NOT_PROVIDED';
-    }
+    order.delivery_fee = 0;
+    order.delivery_fee_source = 'NOT_PROVIDED';
   }
 
-  // Parse complete
-
+  // Log parsing results
   // Fallback: If delivery_time is still empty, try extracting from natural language
   if (!order.delivery_time || order.delivery_time.trim() === '') {
-    console.log(`🔍 [PARSE_V1] delivery_time not found in standard format, trying natural language extraction...`);
     const extractedTime = extractDeliveryTimeFromMessage(normalizedText);
     if (extractedTime) {
       order.delivery_time = extractedTime;
@@ -480,14 +472,13 @@ export function parseOrderFromMessage(messageText) {
       const originalTime = order.delivery_time;
       order.delivery_time = normalizeDeliveryTime(order.delivery_time);
       if (order.delivery_time !== originalTime) {
-        console.log(`🔍 [PARSE_V1] Normalized delivery_time: "${originalTime}" → "${order.delivery_time}"`);
       }
     } catch (error) {
+      console.warn(`⚠️ [PARSE_V1] Failed to normalize existing delivery_time "${order.delivery_time}":`, error.message);
       // Try natural language extraction as fallback
       const extractedTime = extractDeliveryTimeFromMessage(normalizedText);
       if (extractedTime) {
         order.delivery_time = extractedTime;
-        console.log(`✅ [PARSE_V1] Used natural language extraction as fallback: "${extractedTime}"`);
       }
     }
   }
@@ -524,10 +515,9 @@ export function validateOrder(order) {
 }
 
 /**
- * Normalize delivery method value
- * Standardizes common values (Pickup, GrabExpress, Custom) and preserves unknown values
- * @param {string} method - Raw delivery method value
- * @returns {string} Normalized delivery method
+ * Normalize delivery method capitalization
+ * Standardizes valid values: "Pickup", "GrabExpress", "Custom"
+ * For other values, keeps original casing
  */
 function normalizeDeliveryMethod(method) {
   if (!method || typeof method !== 'string') {
@@ -553,8 +543,8 @@ function normalizeDeliveryMethod(method) {
  * Format order as readable text
  */
 export function formatOrderSummary(order) {
-  let summary = `📋 **Order Summary**\n\n`;
-  summary += `👤 **Customer:** ${order.customer_name || 'N/A'}\n`;
+  // Format customer and order info only (items and notes will be added separately with prices)
+  let summary = `👤 **Customer:** ${order.customer_name || 'N/A'}\n`;
   summary += `📞 **Phone:** ${order.phone_number || 'N/A'}\n`;
   summary += `📍 **Address:** ${order.address || 'N/A'}\n\n`;
 
@@ -577,88 +567,7 @@ export function formatOrderSummary(order) {
     summary += `🚚 **Delivery Method:** ${deliveryMethod}\n`;
   }
 
-  if (order.items.length > 0) {
-    summary += `\n📦 **Items:**\n`;
-    
-    // Calculate total cups and required styrofoam boxes
-    let totalCups = 0;
-    let hasPackagingRequest = false;
-    
-    // Check notes for packaging request (e.g., "Packaging Styrofoam: YA")
-    if (order.notes && order.notes.length > 0) {
-      for (const note of order.notes) {
-        const noteLower = (note || '').toLowerCase();
-        if ((noteLower.includes('packaging') || noteLower.includes('styrofoam')) && 
-            (noteLower.includes('ya') || noteLower.includes('yes')) && 
-            !noteLower.includes('tidak')) {
-          hasPackagingRequest = true;
-          break;
-        }
-      }
-    }
-    
-    // Count cups and check items for packaging
-    order.items.forEach(item => {
-      const itemName = (item.name || '').toLowerCase();
-      
-      // Check if packaging is requested in items
-      if (itemName.includes('packaging') || itemName.includes('styrofoam')) {
-        hasPackagingRequest = true;
-        return; // Skip packaging items in cup count
-      }
-      
-      // Count cups from cup-based products (Dawet Small/Medium/Large)
-      if (itemName.includes('dawet') && 
-          (itemName.includes('small') || 
-           itemName.includes('medium') || 
-           itemName.includes('large'))) {
-        // Exclude botol items (they're not cups)
-        if (!itemName.includes('botol')) {
-          totalCups += parseInt(item.quantity || 0);
-        }
-      }
-    });
-    
-    // Calculate required styrofoam boxes (1 box per 50 cups, rounded up)
-    const requiredStyrofoamBoxes = hasPackagingRequest && totalCups > 0 ? Math.ceil(totalCups / 50) : 0;
-    let packagingShown = false;
-    
-    // Display items, replacing packaging with calculated quantity
-    order.items.forEach(item => {
-      const itemName = (item.name || '').toLowerCase();
-      
-      // If this is a packaging item, show calculated quantity
-      if (itemName.includes('packaging') || itemName.includes('styrofoam')) {
-        if (requiredStyrofoamBoxes > 0) {
-          summary += `• ${requiredStyrofoamBoxes}x Packaging Styrofoam (50 cup)\n`;
-          packagingShown = true;
-        }
-        // Skip the original packaging item (we've replaced it with calculated value)
-        return;
-      }
-      
-      // Display other items normally
-      summary += `• ${item.quantity}x ${item.name}\n`;
-    });
-    
-    // If packaging was requested (via notes) but not in items, add it
-    if (hasPackagingRequest && !packagingShown) {
-      if (requiredStyrofoamBoxes > 0) {
-        summary += `• ${requiredStyrofoamBoxes}x Packaging Styrofoam (50 cup)\n`;
-      } else if (totalCups === 0) {
-        // If packaging requested but no cups found, show default 1 box
-        summary += `• 1x Packaging Styrofoam (50 cup)\n`;
-      }
-    }
-  }
-
-  if (order.notes.length > 0) {
-    summary += `\n📝 **Notes:**\n`;
-    order.notes.forEach(note => {
-      summary += `• ${note}\n`;
-    });
-  }
-
+  // Items and notes will be added in server.js with prices
   return summary;
 }
 
@@ -686,8 +595,8 @@ export function parseOrderMessageV2(messageText) {
   const normalizedText = normalizeText(messageText);
   const rawLength = messageText ? messageText.length : 0;
   const normalizedLength = normalizedText.length;
-  
-  // Text normalization complete
+  if (rawLength !== normalizedLength) {
+  }
 
   const order = {
     customer_name: null,
@@ -702,7 +611,7 @@ export function parseOrderMessageV2(messageText) {
     notes: [],
     delivery_fee: null, // Biaya Pengiriman (Ongkir) - canonical field for Google Sheets
     delivery_fee_source: null, // 'USER_INPUT', 'USER_EMPTY', 'NOT_PROVIDED'
-    delivery_method: null, // Metode pengiriman - FIRST-CLASS FIELD (not in notes)
+    delivery_method: null, // Metode pengiriman (Pickup, GrabExpress, Custom, etc.) - stored in Orders.delivery_method
   };
 
   if (!normalizedText || normalizedText.length === 0) {
@@ -834,7 +743,6 @@ export function parseOrderMessageV2(messageText) {
     // Parse Detail Pesanan section (case-insensitive, handles both "Detail Pesanan" and "Detail pesanan")
     if (line.match(/^Detail\s+[Pp]esanan\s*:?\s*$/i)) {
       orderDetailsStarted = true;
-      console.log(`🔍 [PARSE_V2] Found "Detail Pesanan" section, starting item extraction`);
       continue;
     }
 
@@ -867,13 +775,15 @@ export function parseOrderMessageV2(messageText) {
       
       // Flexible regex to match item formats:
       // - "• 80 x Dawet Kemayu Small" (with bullet and x)
+      // - "•⁠  ⁠80 x Dawet Kemayu Small" (with bullet and zero-width spaces)
       // - "80 x Dawet Kemayu Small" (no bullet, with x)
       // - "80x Dawet Kemayu Small" (no space before x)
       // - "80 Dawet Kemayu Small" (no x)
       // - "2 * Dawet Kemayu Large" (asterisk instead of x)
-      // Pattern: optional bullet (•, -, *), optional spaces, number, optional spaces, optional x or *, optional spaces, item name
+      // Pattern: optional bullet (•, -, *), optional spaces (including zero-width), number, optional spaces, optional x or *, optional spaces, item name
       // Use non-greedy match and ensure we capture the full item name
-      const itemMatch = cleanLine.match(/^\s*(?:[•\-*]\s*)?(\d+)\s*(?:x|\*)?\s*(.+)$/i);
+      // CRITICAL: Handle zero-width spaces that might appear after bullet (•⁠)
+      const itemMatch = cleanLine.match(/^\s*(?:[•\-*][\s\u200B-\u200D\uFEFF]*)?(\d+)\s*(?:x|\*)?\s*(.+)$/i);
       if (itemMatch && itemMatch[1] && itemMatch[2]) {
         const quantity = parseInt(itemMatch[1], 10);
         const itemName = itemMatch[2].trim();
@@ -883,6 +793,22 @@ export function parseOrderMessageV2(messageText) {
             name: itemName,
           });
           continue;
+        }
+      }
+      
+      // Fallback: Try matching without bullet (in case bullet pattern failed)
+      if (!itemMatch) {
+        const fallbackMatch = cleanLine.match(/^(\d+)\s*(?:x|\*)?\s*(.+)$/i);
+        if (fallbackMatch && fallbackMatch[1] && fallbackMatch[2]) {
+          const quantity = parseInt(fallbackMatch[1], 10);
+          const itemName = fallbackMatch[2].trim();
+          if (itemName && itemName.length > 0 && quantity > 0 && !isNaN(quantity)) {
+            order.items.push({
+              quantity: quantity,
+              name: itemName,
+            });
+            continue;
+          }
         }
       }
       
@@ -907,15 +833,17 @@ export function parseOrderMessageV2(messageText) {
       continue;
     }
 
-    // Parse Metode pengiriman - ASSIGN TO delivery_method (NOT notes)
-    if (line.match(/^Metode\s+pengiriman\s*:?\s*(.+)$/i)) {
-      const method = line.replace(/^Metode\s+pengiriman\s*:?\s*/i, '').trim();
-      console.log(`[TRACE parse] delivery_method_raw="${method}"`);
+    // Parse Metode pengiriman (robust regex with multiline support)
+    if (line.match(/^Metode\s+pengiriman\s*:?\s*(.+)$/im)) {
+      const originalLine = line;
+      let method = line.replace(/^Metode\s+pengiriman\s*:?\s*/i, '').trim();
       
+      // Normalize multiple spaces to single space
+      method = method.replace(/\s+/g, ' ');
       if (!method || method === '-') {
         order.delivery_method = '-';
       } else {
-        // Check if it's a placeholder menu (contains "/" AND all three options)
+        // Check if it's a placeholder (contains "/" AND all three options)
         const methodLower = method.toLowerCase();
         const isPlaceholder = method.includes('/') && 
                               methodLower.includes('pickup') && 
@@ -939,7 +867,6 @@ export function parseOrderMessageV2(messageText) {
     if (line.match(/^(?:Biaya\s+Pengiriman\s*\(Rp\)|Biaya\s+Pengiriman|Ongkir|Delivery\s+Fee)\s*:?\s*(.+)$/i)) {
       const originalLine = line;
       const cost = line.replace(/^(?:Biaya\s+Pengiriman\s*\(Rp\)|Biaya\s+Pengiriman|Ongkir|Delivery\s+Fee)\s*:?\s*/i, '').trim();
-      
       if (!cost || cost === '-') {
         // Field exists but is empty
         order.delivery_fee = 0;
@@ -1007,16 +934,12 @@ export function parseOrderMessageV2(messageText) {
   }
 
   // Set delivery_fee_source if not provided
-  // Default to 0 (not null) to ensure it's always a number
   if (order.delivery_fee_source === null) {
-    if (order.delivery_fee === null || order.delivery_fee === undefined) {
-      order.delivery_fee = 0;
-      order.delivery_fee_source = 'NOT_PROVIDED';
-    }
+    order.delivery_fee = 0;
+    order.delivery_fee_source = 'NOT_PROVIDED';
   }
 
-  // Parse complete
-
+  // Log parsing results
   // Fallback: If delivery_time is still empty, try extracting from natural language
   if (!order.delivery_time || order.delivery_time.trim() === '') {
     const extractedTime = extractDeliveryTimeFromMessage(normalizedText);

@@ -79,9 +79,9 @@ export async function ensureRemindersSheet() {
           ]],
         },
       });
-      
     }
   } catch (error) {
+    console.error('❌ Error ensuring Reminders sheet:', error.message);
     throw error;
   }
 }
@@ -103,6 +103,7 @@ async function reminderExists(orderId, reminderType) {
     const reminderTypeColIndex = headerMap.reminder_type;
     
     if (orderIdColIndex === undefined || reminderTypeColIndex === undefined) {
+      console.warn(`⚠️ [REMINDER_EXISTS] Required columns not found in ${REMINDERS_SHEET} sheet`);
       return false; // Assume doesn't exist if columns not found
     }
     
@@ -124,10 +125,11 @@ async function reminderExists(orderId, reminderType) {
         return true;
       }
     }
-
     return false;
   } catch (error) {
+    console.error('❌ [REMINDER_EXISTS] Error checking reminder existence:', error);
     if (error.stack) {
+      console.error(`❌ [REMINDER_EXISTS] Stack:`, error.stack);
     }
     return false; // On error, assume doesn't exist (allow write)
   }
@@ -139,7 +141,6 @@ async function reminderExists(orderId, reminderType) {
  */
 export async function saveReminder(reminderData) {
   try {
-    
     await ensureRemindersSheet();
     
     // Check for duplicate reminder (same Order ID + Reminder Type)
@@ -167,6 +168,7 @@ export async function saveReminder(reminderData) {
         const { normalizeEventDate } = await import('./date-utils.js');
         normalizedReminderDate = normalizeEventDate(normalizedReminderDate);
       } catch (error) {
+        console.error(`❌ [SAVE_REMINDER] Failed to normalize reminder_date "${reminderData.reminderDate}":`, error.message);
         throw new Error(`Invalid reminder_date format: ${reminderData.reminderDate}. ${error.message}`);
       }
     }
@@ -187,8 +189,6 @@ export async function saveReminder(reminderData) {
     
     // Build row using header map
     const row = buildRowFromMap(headerMap, dataObject);
-    
-
     // Determine range dynamically based on header length
     const lastCol = String.fromCharCode(65 + headerMap.__headersLength - 1); // A=65
     const range = `${REMINDERS_SHEET}!A:${lastCol}`;
@@ -201,9 +201,11 @@ export async function saveReminder(reminderData) {
         values: [row],
       },
     });
-    
     return reminderId;
   } catch (error) {
+    console.error('❌ [SAVE_REMINDER] Error saving reminder:', error);
+    console.error('❌ [SAVE_REMINDER] Stack:', error.stack);
+    console.error('❌ [SAVE_REMINDER] Reminder data:', reminderData);
     throw error;
   }
 }
@@ -253,6 +255,8 @@ export async function getRemindersForDate(date) {
       notes: getValue(row, 'notes'),
     })).filter(r => r.reminderDate === targetDate && r.status === 'pending');
   } catch (error) {
+    console.error('❌ [GET_REMINDERS] Error getting reminders:', error.message);
+    console.error(`❌ [GET_REMINDERS] Stack:`, error.stack);
     return [];
   }
 }
@@ -269,6 +273,7 @@ export async function markReminderSent(reminderId) {
     const reminderIdColIndex = headerMap.reminder_id;
     
     if (reminderIdColIndex === undefined) {
+      console.error(`❌ [MARK_REMINDER_SENT] Column "reminder_id" not found in ${REMINDERS_SHEET} sheet`);
       return false;
     }
     
@@ -316,6 +321,7 @@ export async function markReminderSent(reminderId) {
         });
         return true;
       }
+      console.warn(`⚠️ [MARK_REMINDER_SENT] Column "${internalKey}" not found in header map, skipping update`);
       return false;
     };
     
@@ -334,9 +340,10 @@ export async function markReminderSent(reminderId) {
         },
       });
     }
-    
     return true;
   } catch (error) {
+    console.error('❌ [MARK_REMINDER_SENT] Error marking reminder as sent:', error.message);
+    console.error(`❌ [MARK_REMINDER_SENT] Stack:`, error.stack);
     return false;
   }
 }
@@ -401,6 +408,7 @@ function parseEventDate(input) {
       return date;
     }
   } catch (error) {
+    console.error(`❌ [PARSE_EVENT_DATE] Error parsing date "${input}":`, error);
     return null;
   }
 }
@@ -414,8 +422,6 @@ export function calculateReminderDates(eventDate) {
   if (!eventDate) {
     return null;
   }
-  
-  
   try {
     let date;
     
@@ -461,9 +467,10 @@ export function calculateReminderDates(eventDate) {
       'H-3': h3Date.toISOString().split('T')[0],
       'H-1': h1Date.toISOString().split('T')[0],
     };
-    
     return reminderDates;
   } catch (error) {
+    console.error('❌ [CALC_REMINDER_DATES] Error calculating reminder dates:', error);
+    console.error('❌ [CALC_REMINDER_DATES] Stack:', error.stack);
     return null;
   }
 }
@@ -472,10 +479,20 @@ export function calculateReminderDates(eventDate) {
 
 /**
  * Create reminders for an order (H-4, H-3, H-1)
- * Includes comprehensive logging and error handling
+ * 
+ * @deprecated This function is DEPRECATED. Do NOT use it.
+ * Reminders are now handled by the daily job (runDailyRemindersJob) which:
+ * - Reads Orders and Reminders once per day (quota-friendly)
+ * - Treats Reminders sheet as a send log (append-only)
+ * - Does NOT pre-create reminder rows
+ * 
+ * This function is kept for backward compatibility but should not be called.
+ * If you see this being called, remove the call and rely on the daily job instead.
  */
 export async function createOrderReminders(orderId, eventDate, orderData = null) {
-  
+  console.warn(`⚠️ [DEPRECATED] createOrderReminders() called for order ${orderId}. This should not be called. Reminders are handled by daily job.`);
+  // Return empty array to prevent errors, but do NOT create reminders
+  return [];
   try {
     // Normalize event_date to YYYY-MM-DD format if needed (defensive)
     let normalizedEventDate = eventDate;
@@ -484,6 +501,7 @@ export async function createOrderReminders(orderId, eventDate, orderData = null)
         const { normalizeEventDate } = await import('./date-utils.js');
         normalizedEventDate = normalizeEventDate(eventDate);
       } catch (error) {
+        console.error(`❌ [CREATE_REMINDERS] Failed to normalize event_date "${eventDate}":`, error.message);
         return [];
       }
     }
@@ -497,8 +515,6 @@ export async function createOrderReminders(orderId, eventDate, orderData = null)
     if (!reminderDates) {
       return [];
     }
-
-
     // Get order data if not provided (for additional info like delivery time)
     let order = orderData;
     if (!order) {
@@ -509,6 +525,7 @@ export async function createOrderReminders(orderId, eventDate, orderData = null)
         } else {
         }
       } catch (error) {
+        console.error(`⚠️ [CREATE_REMINDERS] Error retrieving order data:`, error);
         // Continue without order data
       }
     }
@@ -520,6 +537,7 @@ export async function createOrderReminders(orderId, eventDate, orderData = null)
         const { normalizeDeliveryTime } = await import('./price-calculator.js');
         deliveryTime = normalizeDeliveryTime(order.delivery_time);
       } catch (error) {
+        console.warn(`⚠️ [CREATE_REMINDERS] Failed to normalize delivery_time "${order.delivery_time}":`, error.message);
         // Use original value if normalization fails
         deliveryTime = order.delivery_time;
       }
@@ -528,7 +546,6 @@ export async function createOrderReminders(orderId, eventDate, orderData = null)
     const reminders = [];
     for (const [type, date] of Object.entries(reminderDates)) {
       try {
-        
         // Build reminder data
         const reminderData = {
           orderId,
@@ -544,72 +561,18 @@ export async function createOrderReminders(orderId, eventDate, orderData = null)
         reminders.push({ id: reminderId, type, date });
         
       } catch (error) {
+        console.error(`❌ [CREATE_REMINDERS] Error creating reminder ${type} for order ${orderId}:`, error);
+        console.error(`❌ [CREATE_REMINDERS] Stack:`, error.stack);
         // Continue with other reminders even if one fails
       }
     }
 
     return reminders;
   } catch (error) {
+    console.error(`❌ [CREATE_REMINDERS] Fatal error creating reminders for order ${orderId}:`, error);
+    console.error(`❌ [CREATE_REMINDERS] Stack:`, error.stack);
     return [];
   }
-}
-
-/**
- * Get reminder message based on type
- */
-function getReminderMessage(order, reminderType) {
-  const orderId = order.id || 'N/A';
-  const customerName = order.customer_name || 'N/A';
-  const eventDate = order.event_date || 'N/A';
-  // Use total_amount (canonical) with fallback to final_total (legacy)
-  const totalAmount = order.total_amount || order.final_total || 0;
-  const paidAmount = order.paid_amount || 0;
-  const paymentStatus = order.payment_status || 'UNPAID';
-  const remainingBalance = totalAmount - paidAmount;
-
-  let message = '';
-  
-  switch (reminderType) {
-    case 'H-4':
-      message = `🔔 **REMINDER H-4: PENGINGAT PEMBAYARAN**\n\n`;
-      message += `📋 Order ID: ${orderId}\n`;
-      message += `👤 Customer: ${customerName}\n`;
-      message += `📅 Event Date: ${eventDate}\n\n`;
-      if (paymentStatus !== 'FULL PAID') {
-        message += `💰 **Status Pembayaran:**\n`;
-        message += `Total: Rp ${formatRupiah(totalAmount)}\n`;
-        message += `Dibayar: Rp ${formatRupiah(paidAmount)}\n`;
-        message += `Sisa: Rp ${formatRupiah(remainingBalance)}\n\n`;
-        message += `⚠️ Mohon ingatkan customer untuk melakukan pembayaran!`;
-      } else {
-        message += `✅ Pembayaran sudah lunas.`;
-      }
-      break;
-      
-    case 'H-3':
-      message = `🔔 **REMINDER H-3: PESANAN BAHAN BAKU**\n\n`;
-      message += `📋 Order ID: ${orderId}\n`;
-      message += `👤 Customer: ${customerName}\n`;
-      message += `📅 Event Date: ${eventDate}\n\n`;
-      message += `⚠️ **Action Required:**\n`;
-      message += `Silakan pesan bahan baku untuk order ini!`;
-      break;
-      
-    case 'H-1':
-      message = `🔔 **REMINDER H-1: PERSIAPAN OUTLET**\n\n`;
-      message += `📋 Order ID: ${orderId}\n`;
-      message += `👤 Customer: ${customerName}\n`;
-      message += `📅 Event Date: ${eventDate}\n`;
-      message += `🕐 Delivery Time: ${order.delivery_time || 'TBD'}\n\n`;
-      message += `⚠️ **Action Required:**\n`;
-      message += `Silakan persiapkan outlet untuk order ini!`;
-      break;
-      
-    default:
-      message = `🔔 **REMINDER**\n\nOrder ID: ${orderId}`;
-  }
-
-  return message;
 }
 
 /**
@@ -620,33 +583,191 @@ function formatRupiah(amount) {
 }
 
 /**
- * Send reminder to admin
- * @param {Function} sendMessage - Function to send Telegram message
+ * Get reminder message based on type (exact templates as specified)
  */
-export async function sendReminderToAdmin(order, reminderType, sendMessage) {
-  try {
-    const adminIds = process.env.ADMIN_TELEGRAM_USER_IDS 
-      ? process.env.ADMIN_TELEGRAM_USER_IDS.split(',').map(id => parseInt(id.trim()))
-      : [];
-    
-    if (adminIds.length === 0) {
-      return false;
-    }
+function getReminderMessage(order, reminderType) {
+  const orderId = order.id || 'N/A';
+  const customerName = order.customer_name || 'N/A';
+  const eventDate = order.event_date || 'N/A';
+  const deliveryTime = order.delivery_time || 'TBD';
+  const totalAmount = order.total_amount || order.final_total || 0;
+  const paidAmount = order.paid_amount || 0;
+  const paymentStatus = order.payment_status || 'UNPAID';
+  const remainingBalance = totalAmount - paidAmount;
+  const shippingMethod = order.shipping_method || order.delivery_method || '-';
+  
+  // Format items list
+  let itemsList = '';
+  const items = order.items || [];
+  if (items.length > 0) {
+    itemsList = items.map(item => `${item.quantity}x ${item.name}`).join('\n');
+  } else {
+    itemsList = '-';
+  }
+  
+  // Calculate total cups
+  const totalCups = items.reduce((sum, item) => sum + (item.quantity || 0), 0);
+  
+  // Check packaging
+  const packagingStatus = order.packaging_fee > 0 ? 'YA' : 'TIDAK';
+  
+  let message = '';
+  
+  switch (reminderType) {
+    case 'H4_PAYMENT':
+      // REMINDER H-4 (Customer: Pelunasan – WAJIB)
+      message = `Halo ${customerName} 👋\n\n`;
+      message += `Kami dari Dawet Kemayu Menteng ingin mengingatkan bahwa\n`;
+      message += `jadwal pengiriman pesanan Anda tinggal H-4.\n\n`;
+      message += `Detail pesanan:\n`;
+      message += `Invoice: ${orderId}\n`;
+      message += `Total Pesanan: Rp${formatRupiah(totalAmount)}\n`;
+      message += `Sisa Pembayaran: Rp${formatRupiah(remainingBalance)}\n\n`;
+      message += `Mohon melakukan pelunasan pembayaran\n`;
+      message += `paling lambat H-4 sebelum pengiriman\n`;
+      message += `agar pesanan dapat kami proses sesuai jadwal.\n\n`;
+      message += `--------------------------------\n`;
+      message += `🏦 PEMBAYARAN TRANSFER BANK\n`;
+      message += `Bank Jago\n`;
+      message += `No. Rekening: 102730840011\n`;
+      message += `a.n. Septina Eka Kartika Dewi\n`;
+      message += `--------------------------------\n\n`;
+      message += `Terima kasih atas perhatiannya 🙏`;
+      break;
+      
+    case 'H3_ORDER_BAHAN':
+      // REMINDER H-3 – ORDER BAHAN (INTERNAL)
+      message = `⏰ REMINDER H-3 – ORDER BAHAN\n\n`;
+      message += `Pesanan:\n`;
+      message += `Invoice: ${orderId}\n`;
+      message += `Nama Pemesan: ${customerName}\n`;
+      message += `Tanggal Event: ${eventDate}\n`;
+      message += `Waktu Kirim: ${deliveryTime}\n\n`;
+      message += `Detail Pesanan:\n${itemsList}\n\n`;
+      message += `Catatan:\n`;
+      message += `• Pastikan semua bahan sudah dipesan hari ini\n`;
+      message += `• Cek ketersediaan bahan utama & topping\n`;
+      message += `• Konfirmasi ulang jumlah cup & packaging\n\n`;
+      message += `Status Pembayaran: ${paymentStatus}\n\n`;
+      message += `Harap segera lakukan order bahan.`;
+      break;
+      
+    case 'H1_PREPARATION':
+      // REMINDER H-1 – PREPARATION (OUTLET)
+      message = `⏰ REMINDER H-1 – PREPARATION\n`;
+      message += `Dawet Kemayu Menteng\n\n`;
+      message += `Pesanan:\n`;
+      message += `Invoice: ${orderId}\n`;
+      message += `Nama Pemesan: ${customerName}\n`;
+      message += `Tanggal Event: ${eventDate}\n`;
+      message += `Waktu Kirim: ${deliveryTime}\n`;
+      message += `--------------------------------\n\n`;
+      message += `📦 DETAIL PESANAN\n${itemsList}\n`;
+      message += `Total Cup: ${totalCups} cup\n`;
+      message += `Packaging Styrofoam: ${packagingStatus}\n`;
+      message += `Metode Pengiriman: ${shippingMethod}\n`;
+      message += `--------------------------------\n\n`;
+      message += `🛠️ CHECKLIST PREPARATION\n`;
+      message += `• Bahan utama siap & sesuai jumlah\n`;
+      message += `• Topping lengkap\n`;
+      message += `• Cup, sedotan, tutup tersedia\n`;
+      message += `• Packaging styrofoam siap (jika ada)\n`;
+      message += `• Label / penanda pesanan jelas\n`;
+      message += `• Alamat & PIC pengiriman sudah dicek\n`;
+      message += `--------------------------------\n\n`;
+      message += `Status Pembayaran: ${paymentStatus}\n\n`;
+      message += `Harap pastikan semua persiapan selesai hari ini.`;
+      break;
+      
+    default:
+      message = `🔔 **REMINDER**\n\nOrder ID: ${orderId}`;
+  }
 
-    const message = getReminderMessage(order, reminderType);
+  return message;
+}
+
+/**
+ * Send reminder to all active admin Telegram users
+ * Reads admin chat IDs from Users sheet (platform=telegram, role=admin, is_active=true)
+ * Sends to all admins and returns success/failure summary
+ * 
+ * @param {string} messageText - Message text to send
+ * @param {Function} sendMessage - Function to send Telegram message (chatId, text)
+ * @returns {Promise<{success: boolean, successCount: number, failCount: number, errorMessage?: string}>}
+ */
+export async function sendReminderToAdmins(messageText, sendMessage) {
+  try {
+    // Get admin chat IDs from Users sheet (with caching)
+    const chatIds = await getAdminChatIds();
     
-    // Send to all admins
-    for (const adminId of adminIds) {
+    if (chatIds.length === 0) {
+      const errorMsg = 'No admin recipients found in Users (platform=telegram, role=admin, is_active=true)';
+      console.warn(`⚠️ [SEND_REMINDER_ADMINS] ${errorMsg}`);
+      return {
+        success: false,
+        successCount: 0,
+        failCount: 0,
+        errorMessage: errorMsg,
+      };
+    }
+    
+    
+    let successCount = 0;
+    let failCount = 0;
+    let firstError = null;
+    
+    // Send to each admin
+    for (const chatId of chatIds) {
       try {
-        await sendMessage(adminId, message);
+        await sendMessage(chatId, messageText);
+        successCount++;
       } catch (error) {
+        failCount++;
+        if (!firstError) {
+          firstError = error.message || String(error);
+        }
+        console.error(`❌ [SEND_REMINDER_ADMINS] Failed to send to admin chat ${chatId}:`, error.message);
       }
     }
     
-    return true;
+    if (successCount > 0) {
+      return {
+        success: true,
+        successCount,
+        failCount,
+      };
+    } else {
+      // All sends failed
+      const errorMsg = `Telegram send failed for all admins: ${firstError || 'Unknown error'}`;
+      console.error(`❌ [SEND_REMINDER_ADMINS] ${errorMsg}`);
+      return {
+        success: false,
+        successCount: 0,
+        failCount,
+        errorMessage: errorMsg,
+      };
+    }
   } catch (error) {
-    return false;
+    const errorMsg = `Error getting admin recipients: ${error.message || String(error)}`;
+    console.error(`❌ [SEND_REMINDER_ADMINS] ${errorMsg}`);
+    return {
+      success: false,
+      successCount: 0,
+      failCount: 0,
+      errorMessage: errorMsg,
+    };
   }
+}
+
+/**
+ * Send reminder to admin (DEPRECATED - use sendReminderToAdmins instead)
+ * @deprecated Use sendReminderToAdmins() which reads from Users sheet
+ */
+export async function sendReminderToAdmin(order, reminderType, sendMessage) {
+  console.warn('⚠️ [DEPRECATED] sendReminderToAdmin() is deprecated. Use sendReminderToAdmins() instead.');
+  const message = getReminderMessage(order, reminderType);
+  const result = await sendReminderToAdmins(message, sendMessage);
+  return result.success;
 }
 
 /**
@@ -669,10 +790,7 @@ export async function runDailyRemindersJob(sendMessage, todayOverride = null) {
     
     // Get today's date in Asia/Jakarta
     const today = todayOverride ? getTodayJakarta(todayOverride) : getTodayJakarta();
-    console.log(`🔄 [DAILY_REMINDERS] Starting daily job for ${today}`);
-    
     // STEP 1: Read Orders ONCE (minimal reads)
-    console.log(`📖 [DAILY_REMINDERS] Reading Orders sheet (once)...`);
     const allOrders = await getAllOrders(1000); // Read up to 1000 orders
     
     // Import normalizeEventDate for date normalization
@@ -703,15 +821,12 @@ export async function runDailyRemindersJob(sendMessage, todayOverride = null) {
       }
     }
     
-    console.log(`✅ [DAILY_REMINDERS] Found ${eligibleOrders.length} eligible order(s) for today`);
     
     if (eligibleOrders.length === 0) {
-      console.log(`✅ [DAILY_REMINDERS] No reminders due today`);
       return;
     }
     
     // STEP 2: Read Reminders ONCE (anti-spam + idempotency sets)
-    console.log(`📖 [DAILY_REMINDERS] Reading Reminders sheet (once) for anti-spam and idempotency...`);
     
     // Read ALL reminders (not just today's) to build global per-invoice lock
     const allReminders = await getAllReminders(); // Read all reminders
@@ -724,7 +839,6 @@ export async function runDailyRemindersJob(sendMessage, todayOverride = null) {
       }
     }
     
-    console.log(`✅ [DAILY_REMINDERS] Found ${sentInvoiceSet.size} invoice(s) with SENT reminders (anti-spam lock)`);
     
     // Build idempotency set for today: key = `${order_id}|${reminder_type}|${reminder_date}`
     const sentKeys = new Set();
@@ -736,7 +850,6 @@ export async function runDailyRemindersJob(sendMessage, todayOverride = null) {
       }
     }
     
-    console.log(`✅ [DAILY_REMINDERS] Found ${sentKeys.size} already-processed reminder(s) for today in idempotency set`);
     
     // STEP 3: Process each eligible order
     let sentCount = 0;
@@ -764,8 +877,6 @@ export async function runDailyRemindersJob(sendMessage, todayOverride = null) {
         
         // ANTI-SPAM CHECK: If invoice has ANY SENT reminder, skip ALL future reminders
         if (sentInvoiceSet.has(order.id)) {
-          console.log(`[REMINDER_SKIP] invoice=${order.id} reason="already_sent_once"`);
-          console.log(`⏭️ [DAILY_REMINDERS] Skipping ${order.id} ${reminderType} (invoice already has SENT reminder - anti-spam lock)`);
           continue; // Skip without writing to Reminders sheet (quota-friendly)
         }
         
@@ -774,7 +885,6 @@ export async function runDailyRemindersJob(sendMessage, todayOverride = null) {
         
         // Check if already processed today
         if (sentKeys.has(key)) {
-          console.log(`⏭️ [DAILY_REMINDERS] Skipping ${order.id} ${reminderType} (already processed today)`);
           continue;
         }
         
@@ -782,7 +892,6 @@ export async function runDailyRemindersJob(sendMessage, todayOverride = null) {
         if (reminderType === 'H4_PAYMENT') {
           const paymentStatus = (order.payment_status || 'UNPAID').toUpperCase();
           if (paymentStatus === 'FULL PAID' || paymentStatus === 'FULLPAID' || paymentStatus === 'PAID') {
-            console.log(`⏭️ [DAILY_REMINDERS] Skipping ${order.id} ${reminderType} (payment_status: ${paymentStatus})`);
             
             // Append SKIPPED log row
             await saveReminder({
@@ -849,8 +958,6 @@ export async function runDailyRemindersJob(sendMessage, todayOverride = null) {
         failedCount++;
       }
     }
-    
-    console.log(`✅ [DAILY_REMINDERS] Job completed: ${sentCount} sent, ${skippedCount} skipped, ${failedCount} failed`);
   } catch (error) {
     console.error('❌ [DAILY_REMINDERS] Fatal error in daily job:', error);
     console.error('❌ [DAILY_REMINDERS] Stack:', error.stack);
@@ -908,91 +1015,135 @@ async function getAllReminders() {
     const response = await retryWithBackoff(async () => {
       return await sheets.spreadsheets.values.get({
         spreadsheetId: SPREADSHEET_ID,
-        range: `${REMINDERS_SHEET}!A2:ZZ`, // Start from row 2 (skip header)
+        range: `${REMINDERS_SHEET}!A:${String.fromCharCode(65 + headerMap.__headersLength - 1)}`,
       });
     });
-    
+
     const rows = response.data.values || [];
-    
-    if (rows.length === 0) {
+    if (rows.length <= 1) {
       return [];
     }
-    
-    // Map rows to reminder objects
-    const reminders = rows.map((row, index) => {
-      const getValue = (key, defaultValue = '') => {
-        const colIndex = headerMap[key];
-        if (colIndex === undefined) {
-          return defaultValue;
-        }
-        return row[colIndex] !== undefined && row[colIndex] !== '' ? row[colIndex] : defaultValue;
-      };
-      
-      return {
-        id: getValue('reminder_id', `temp_${index + 2}`),
-        orderId: getValue('order_id', ''),
-        reminderType: getValue('reminder_type', ''),
-        reminderDate: getValue('reminder_date', ''),
-        status: getValue('status', ''),
-        sentAt: getValue('sent_at', ''),
-        attempts: parseInt(getValue('attempts', '0')) || 0,
-        lastAttemptAt: getValue('last_attempt_at', ''),
-        createdAt: getValue('created_at', ''),
-        notes: getValue('notes', ''),
-      };
-    });
-    
-    return reminders;
+
+    const getValue = (row, internalKey, defaultValue = '') => {
+      const colIndex = headerMap[internalKey];
+      if (colIndex === undefined) return defaultValue;
+      return row[colIndex] !== undefined && row[colIndex] !== '' ? row[colIndex] : defaultValue;
+    };
+
+    return rows.slice(1).map(row => ({
+      id: getValue(row, 'reminder_id'),
+      orderId: getValue(row, 'order_id'),
+      reminderType: getValue(row, 'reminder_type'),
+      reminderDate: getValue(row, 'reminder_date'),
+      status: getValue(row, 'status', 'pending'),
+      sentAt: getValue(row, 'sent_at'),
+      attempts: parseInt(getValue(row, 'attempts', '0')) || 0,
+      lastAttemptAt: getValue(row, 'last_attempt_at'),
+      createdAt: getValue(row, 'created_at'),
+      notes: getValue(row, 'notes'),
+    }));
   } catch (error) {
-    console.error('❌ [GET_ALL_REMINDERS] Error reading reminders:', error);
-    return []; // Return empty array on error (fail gracefully)
+    console.error('❌ [GET_ALL_REMINDERS] Error getting all reminders:', error.message);
+    return [];
   }
 }
 
 /**
- * Check and send reminders for today
- * @param {Function} sendMessage - Function to send Telegram message
+ * Get reminders for a date range (for idempotency check)
+ * @param {string} startDate - Start date (YYYY-MM-DD)
+ * @param {string} endDate - End date (YYYY-MM-DD)
+ * @returns {Promise<Array>} Array of reminder objects
+ */
+async function getRemindersForDateRange(startDate, endDate) {
+  try {
+    await ensureRemindersSheet();
+    
+    const { getSheetHeaderMap } = await import('./google-sheets.js');
+    const headerMap = await getSheetHeaderMap(REMINDERS_SHEET, { requireSnakeCase: false });
+    
+    // Retry wrapper for 429 errors (reuse from google-sheets.js pattern)
+    const retryWithBackoff = async (fn, maxAttempts = 5) => {
+      let attempt = 0;
+      const baseDelay = 500;
+      
+      while (attempt < maxAttempts) {
+        try {
+          return await fn();
+        } catch (error) {
+          attempt++;
+          const isRateLimit = error.code === 429 || 
+                             error.message?.includes('rateLimitExceeded') ||
+                             error.message?.includes('429') ||
+                             (error.response?.status === 429);
+          
+          if (!isRateLimit || attempt >= maxAttempts) {
+            if (isRateLimit && attempt >= maxAttempts) {
+              const userError = new Error('⚠️ Sistem sedang kena limit Google Sheets (429). Coba lagi 1–2 menit ya.');
+              userError.isRateLimit = true;
+              throw userError;
+            }
+            throw error;
+          }
+          
+          const delay = baseDelay * Math.pow(2, attempt - 1);
+          const jitter = Math.random() * 250;
+          const retryAfter = error.response?.headers?.['retry-after'];
+          const finalDelay = retryAfter ? parseInt(retryAfter) * 1000 : delay + jitter;
+          
+          console.warn(`⚠️ [RETRY] Rate limit (429) on attempt ${attempt}/${maxAttempts}, waiting ${Math.round(finalDelay)}ms...`);
+          await new Promise(resolve => setTimeout(resolve, finalDelay));
+        }
+      }
+    };
+    
+    // Read reminders with retry/backoff
+    const response = await retryWithBackoff(async () => {
+      return await sheets.spreadsheets.values.get({
+        spreadsheetId: SPREADSHEET_ID,
+        range: `${REMINDERS_SHEET}!A:${String.fromCharCode(65 + headerMap.__headersLength - 1)}`,
+      });
+    });
+
+    const rows = response.data.values || [];
+    if (rows.length <= 1) {
+      return [];
+    }
+
+    const getValue = (row, internalKey, defaultValue = '') => {
+      const colIndex = headerMap[internalKey];
+      if (colIndex === undefined) return defaultValue;
+      return row[colIndex] !== undefined && row[colIndex] !== '' ? row[colIndex] : defaultValue;
+    };
+
+    return rows.slice(1).map(row => ({
+      id: getValue(row, 'reminder_id'),
+      orderId: getValue(row, 'order_id'),
+      reminderType: getValue(row, 'reminder_type'),
+      reminderDate: getValue(row, 'reminder_date'),
+      status: getValue(row, 'status', 'pending'),
+      sentAt: getValue(row, 'sent_at'),
+      attempts: parseInt(getValue(row, 'attempts', '0')) || 0,
+      lastAttemptAt: getValue(row, 'last_attempt_at'),
+      createdAt: getValue(row, 'created_at'),
+      notes: getValue(row, 'notes'),
+    })).filter(r => {
+      // Filter by date range
+      if (r.reminderDate < startDate || r.reminderDate > endDate) {
+        return false;
+      }
+      return true;
+    });
+  } catch (error) {
+    console.error('❌ [GET_REMINDERS_RANGE] Error getting reminders:', error.message);
+    return [];
+  }
+}
+
+/**
+ * Check and send reminders for today (DEPRECATED - use runDailyRemindersJob instead)
+ * @deprecated Use runDailyRemindersJob() for quota-friendly reminder processing
  */
 export async function checkAndSendRemindersForToday(sendMessage) {
-  try {
-    const today = new Date().toISOString().split('T')[0];
-    const reminders = await getRemindersForDate(today);
-    
-    if (reminders.length === 0) {
-      return;
-    }
-    
-    
-    for (const reminder of reminders) {
-      try {
-        const order = await getOrderById(reminder.orderId);
-        
-        if (!order) {
-          continue;
-        }
-        
-        // Check cooldown (min 6 hours between reminders of same type)
-        if (reminder.lastAttemptAt) {
-          const lastAttempt = new Date(reminder.lastAttemptAt);
-          const now = new Date();
-          const hoursSinceLastAttempt = (now - lastAttempt) / (1000 * 60 * 60);
-          
-          if (hoursSinceLastAttempt < 6) {
-            continue;
-          }
-        }
-        
-        // Send reminder
-        const sent = await sendReminderToAdmin(order, reminder.reminderType, sendMessage);
-        
-        if (sent) {
-          await markReminderSent(reminder.id);
-        } else {
-          // Mark as failed but don't increment attempts too much
-        }
-      } catch (error) {
-      }
-    }
-  } catch (error) {
-  }
+  console.warn('⚠️ [DEPRECATED] checkAndSendRemindersForToday is deprecated. Use runDailyRemindersJob() instead.');
+  return runDailyRemindersJob(sendMessage);
 }

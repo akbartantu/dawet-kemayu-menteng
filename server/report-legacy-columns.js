@@ -18,6 +18,7 @@ if (sheetName) {
       process.exit(0);
     })
     .catch((error) => {
+      console.error('\n❌ Report failed:', error.message);
       process.exit(1);
     });
 } else {
@@ -30,6 +31,7 @@ if (sheetName) {
       process.exit(0);
     })
     .catch((error) => {
+      console.error('\n❌ Report failed:', error.message);
       process.exit(1);
     });
 }
