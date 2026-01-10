@@ -79,6 +79,7 @@ export async function ensureRemindersSheet() {
           ]],
         },
       });
+
     }
   } catch (error) {
     console.error('❌ Error ensuring Reminders sheet:', error.message);
@@ -114,6 +115,7 @@ async function reminderExists(orderId, reminderType) {
 
     const rows = response.data.values || [];
     if (rows.length <= 1) {
+      console.log(`⚠️ [REMINDER_EXISTS] No data rows in ${REMINDERS_SHEET} (only headers)`);
       return false; // No data rows (only header)
     }
 
@@ -122,9 +124,11 @@ async function reminderExists(orderId, reminderType) {
       const rowOrderId = rows[i][orderIdColIndex];
       const rowReminderType = rows[i][reminderTypeColIndex];
       if (rowOrderId === orderId && rowReminderType === reminderType) {
+
         return true;
       }
     }
+
     return false;
   } catch (error) {
     console.error('❌ [REMINDER_EXISTS] Error checking reminder existence:', error);
@@ -141,11 +145,13 @@ async function reminderExists(orderId, reminderType) {
  */
 export async function saveReminder(reminderData) {
   try {
+
     await ensureRemindersSheet();
     
     // Check for duplicate reminder (same Order ID + Reminder Type)
     const exists = await reminderExists(reminderData.orderId, reminderData.reminderType);
     if (exists) {
+
       return `${reminderData.orderId}_${reminderData.reminderType}_existing`;
     }
     
@@ -167,6 +173,7 @@ export async function saveReminder(reminderData) {
       try {
         const { normalizeEventDate } = await import('./date-utils.js');
         normalizedReminderDate = normalizeEventDate(normalizedReminderDate);
+
       } catch (error) {
         console.error(`❌ [SAVE_REMINDER] Failed to normalize reminder_date "${reminderData.reminderDate}":`, error.message);
         throw new Error(`Invalid reminder_date format: ${reminderData.reminderDate}. ${error.message}`);
@@ -189,6 +196,7 @@ export async function saveReminder(reminderData) {
     
     // Build row using header map
     const row = buildRowFromMap(headerMap, dataObject);
+
     // Determine range dynamically based on header length
     const lastCol = String.fromCharCode(65 + headerMap.__headersLength - 1); // A=65
     const range = `${REMINDERS_SHEET}!A:${lastCol}`;
@@ -201,6 +209,7 @@ export async function saveReminder(reminderData) {
         values: [row],
       },
     });
+
     return reminderId;
   } catch (error) {
     console.error('❌ [SAVE_REMINDER] Error saving reminder:', error);
@@ -230,6 +239,7 @@ export async function getRemindersForDate(date) {
 
     const rows = response.data.values || [];
     if (rows.length <= 1) {
+      console.log(`⚠️ [GET_REMINDERS] No data rows in ${REMINDERS_SHEET} (only headers)`);
       return [];
     }
 
@@ -284,6 +294,7 @@ export async function markReminderSent(reminderId) {
 
     const rows = response.data.values || [];
     if (rows.length <= 1) {
+      console.log(`⚠️ [MARK_REMINDER_SENT] No data rows in ${REMINDERS_SHEET} (only headers)`);
       return false;
     }
 
@@ -299,6 +310,7 @@ export async function markReminderSent(reminderId) {
     }
 
     if (rowIndex === -1) {
+
       return false;
     }
 
@@ -340,6 +352,7 @@ export async function markReminderSent(reminderId) {
         },
       });
     }
+
     return true;
   } catch (error) {
     console.error('❌ [MARK_REMINDER_SENT] Error marking reminder as sent:', error.message);
@@ -356,6 +369,7 @@ export async function markReminderSent(reminderId) {
  */
 function parseEventDate(input) {
   if (!input || typeof input !== 'string') {
+
     return null;
   }
   
@@ -364,6 +378,7 @@ function parseEventDate(input) {
     if (input.includes('/')) {
       const parts = input.split('/');
       if (parts.length !== 3) {
+        console.log(`⚠️ [PARSE_EVENT_DATE] Invalid format (expected DD/MM/YYYY): ${input}`);
         return null;
       }
       
@@ -378,6 +393,7 @@ function parseEventDate(input) {
       
       // Validate parsed values
       if (isNaN(day) || isNaN(month) || isNaN(year)) {
+
         return null;
       }
       
@@ -389,22 +405,27 @@ function parseEventDate(input) {
       
       // Validate date
       if (isNaN(date.getTime())) {
+
         return null;
       }
       
       // Verify the date matches input (catch month/day overflow)
       if (date.getDate() !== day || date.getMonth() !== month || date.getFullYear() !== year) {
+        console.log(`⚠️ [PARSE_EVENT_DATE] Date mismatch - input: ${input}, parsed: ${date.toISOString()}`);
         return null;
       }
       
+      console.log(`✅ [PARSE_EVENT_DATE] Successfully parsed: ${input} → ${date.toISOString().split('T')[0]}`);
       return date;
     } else {
       // Try standard Date parsing as fallback
       const date = new Date(input);
       if (isNaN(date.getTime())) {
+
         return null;
       }
       date.setHours(0, 0, 0, 0);
+      console.log(`✅ [PARSE_EVENT_DATE] Parsed (fallback): ${input} → ${date.toISOString().split('T')[0]}`);
       return date;
     }
   } catch (error) {
@@ -420,8 +441,10 @@ function parseEventDate(input) {
  */
 export function calculateReminderDates(eventDate) {
   if (!eventDate) {
+
     return null;
   }
+
   try {
     let date;
     
@@ -429,12 +452,14 @@ export function calculateReminderDates(eventDate) {
     if (/^\d{4}-\d{2}-\d{2}$/.test(eventDate)) {
       date = new Date(eventDate + 'T00:00:00');
       if (isNaN(date.getTime())) {
+
         return null;
       }
     } else {
       // Legacy format - use parser (defensive)
       date = parseEventDate(eventDate);
       if (!date) {
+
         return null;
       }
     }
@@ -443,9 +468,11 @@ export function calculateReminderDates(eventDate) {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
     
+    console.log(`🔍 [CALC_REMINDER_DATES] Event date: ${date.toISOString().split('T')[0]}, Today: ${today.toISOString().split('T')[0]}`);
     
     // Check if event date is in the future
     if (date <= today) {
+      console.log(`⚠️ [CALC_REMINDER_DATES] Event date is not in the future (${date.toISOString().split('T')[0]} <= ${today.toISOString().split('T')[0]})`);
       return null;
     }
     
@@ -467,6 +494,7 @@ export function calculateReminderDates(eventDate) {
       'H-3': h3Date.toISOString().split('T')[0],
       'H-1': h1Date.toISOString().split('T')[0],
     };
+
     return reminderDates;
   } catch (error) {
     console.error('❌ [CALC_REMINDER_DATES] Error calculating reminder dates:', error);
@@ -493,6 +521,7 @@ export async function createOrderReminders(orderId, eventDate, orderData = null)
   console.warn(`⚠️ [DEPRECATED] createOrderReminders() called for order ${orderId}. This should not be called. Reminders are handled by daily job.`);
   // Return empty array to prevent errors, but do NOT create reminders
   return [];
+
   try {
     // Normalize event_date to YYYY-MM-DD format if needed (defensive)
     let normalizedEventDate = eventDate;
@@ -500,6 +529,7 @@ export async function createOrderReminders(orderId, eventDate, orderData = null)
       try {
         const { normalizeEventDate } = await import('./date-utils.js');
         normalizedEventDate = normalizeEventDate(eventDate);
+
       } catch (error) {
         console.error(`❌ [CREATE_REMINDERS] Failed to normalize event_date "${eventDate}":`, error.message);
         return [];
@@ -509,12 +539,15 @@ export async function createOrderReminders(orderId, eventDate, orderData = null)
     // Normalize today for comparison
     const today = new Date();
     today.setHours(0, 0, 0, 0);
+    console.log(`🔍 [CREATE_REMINDERS] Today (normalized): ${today.toISOString().split('T')[0]}`);
     
     // Calculate reminder dates (expects YYYY-MM-DD format)
     const reminderDates = calculateReminderDates(normalizedEventDate);
     if (!reminderDates) {
+
       return [];
     }
+
     // Get order data if not provided (for additional info like delivery time)
     let order = orderData;
     if (!order) {
@@ -522,7 +555,9 @@ export async function createOrderReminders(orderId, eventDate, orderData = null)
         const { getOrderById } = await import('./google-sheets.js');
         order = await getOrderById(orderId);
         if (order) {
+
         } else {
+
         }
       } catch (error) {
         console.error(`⚠️ [CREATE_REMINDERS] Error retrieving order data:`, error);
@@ -536,6 +571,7 @@ export async function createOrderReminders(orderId, eventDate, orderData = null)
       try {
         const { normalizeDeliveryTime } = await import('./price-calculator.js');
         deliveryTime = normalizeDeliveryTime(order.delivery_time);
+
       } catch (error) {
         console.warn(`⚠️ [CREATE_REMINDERS] Failed to normalize delivery_time "${order.delivery_time}":`, error.message);
         // Use original value if normalization fails
@@ -546,6 +582,7 @@ export async function createOrderReminders(orderId, eventDate, orderData = null)
     const reminders = [];
     for (const [type, date] of Object.entries(reminderDates)) {
       try {
+
         // Build reminder data
         const reminderData = {
           orderId,
@@ -560,6 +597,7 @@ export async function createOrderReminders(orderId, eventDate, orderData = null)
         const reminderId = await saveReminder(reminderData);
         reminders.push({ id: reminderId, type, date });
         
+        console.log(`✅ [CREATE_REMINDERS] Created reminder ${reminderId} (${type}) for ${date}`);
       } catch (error) {
         console.error(`❌ [CREATE_REMINDERS] Error creating reminder ${type} for order ${orderId}:`, error);
         console.error(`❌ [CREATE_REMINDERS] Stack:`, error.stack);
@@ -567,6 +605,7 @@ export async function createOrderReminders(orderId, eventDate, orderData = null)
       }
     }
 
+    console.log(`✅ [CREATE_REMINDERS] Successfully created ${reminders.length} reminder(s) for order ${orderId}`);
     return reminders;
   } catch (error) {
     console.error(`❌ [CREATE_REMINDERS] Fatal error creating reminders for order ${orderId}:`, error);
@@ -615,17 +654,18 @@ function getReminderMessage(order, reminderType) {
   
   switch (reminderType) {
     case 'H4_PAYMENT':
-      // REMINDER H-4 (Customer: Pelunasan – WAJIB)
+      // REMINDER H-4 (Customer: Pelunasan – WAJIB) with FULL PAYMENT confirmation
       message = `Halo ${customerName} 👋\n\n`;
       message += `Kami dari Dawet Kemayu Menteng ingin mengingatkan bahwa\n`;
       message += `jadwal pengiriman pesanan Anda tinggal H-4.\n\n`;
       message += `Detail pesanan:\n`;
-      message += `Invoice: ${orderId}\n`;
+      message += `Invoice: \`${orderId}\`\n`;
       message += `Total Pesanan: Rp${formatRupiah(totalAmount)}\n`;
       message += `Sisa Pembayaran: Rp${formatRupiah(remainingBalance)}\n\n`;
-      message += `Mohon melakukan pelunasan pembayaran\n`;
-      message += `paling lambat H-4 sebelum pengiriman\n`;
-      message += `agar pesanan dapat kami proses sesuai jadwal.\n\n`;
+      message += `⚠️ **PENTING: PELUNASAN PENUH WAJIB**\n\n`;
+      message += `Mohon melakukan **pelunasan pembayaran penuh**\n`;
+      message += `paling lambat H-3 sebelum pengiriman.\n`;
+      message += `Jika pembayaran tidak diterima hingga H-3, pesanan akan **dibatalkan secara otomatis**.\n\n`;
       message += `--------------------------------\n`;
       message += `🏦 PEMBAYARAN TRANSFER BANK\n`;
       message += `Bank Jago\n`;
@@ -639,7 +679,7 @@ function getReminderMessage(order, reminderType) {
       // REMINDER H-3 – ORDER BAHAN (INTERNAL)
       message = `⏰ REMINDER H-3 – ORDER BAHAN\n\n`;
       message += `Pesanan:\n`;
-      message += `Invoice: ${orderId}\n`;
+      message += `Invoice: \`${orderId}\`\n`;
       message += `Nama Pemesan: ${customerName}\n`;
       message += `Tanggal Event: ${eventDate}\n`;
       message += `Waktu Kirim: ${deliveryTime}\n\n`;
@@ -657,7 +697,7 @@ function getReminderMessage(order, reminderType) {
       message = `⏰ REMINDER H-1 – PREPARATION\n`;
       message += `Dawet Kemayu Menteng\n\n`;
       message += `Pesanan:\n`;
-      message += `Invoice: ${orderId}\n`;
+      message += `Invoice: \`${orderId}\`\n`;
       message += `Nama Pemesan: ${customerName}\n`;
       message += `Tanggal Event: ${eventDate}\n`;
       message += `Waktu Kirim: ${deliveryTime}\n`;
@@ -680,7 +720,7 @@ function getReminderMessage(order, reminderType) {
       break;
       
     default:
-      message = `🔔 **REMINDER**\n\nOrder ID: ${orderId}`;
+      message = `🔔 **REMINDER**\n\nOrder ID: \`${orderId}\``;
   }
 
   return message;
@@ -711,6 +751,7 @@ export async function sendReminderToAdmins(messageText, sendMessage) {
       };
     }
     
+    console.log(`📤 [SEND_REMINDER_ADMINS] Sending to ${chatIds.length} admin(s)...`);
     
     let successCount = 0;
     let failCount = 0;
@@ -721,6 +762,7 @@ export async function sendReminderToAdmins(messageText, sendMessage) {
       try {
         await sendMessage(chatId, messageText);
         successCount++;
+
       } catch (error) {
         failCount++;
         if (!firstError) {
@@ -731,6 +773,7 @@ export async function sendReminderToAdmins(messageText, sendMessage) {
     }
     
     if (successCount > 0) {
+      console.log(`✅ [SEND_REMINDER_ADMINS] Successfully sent to ${successCount}/${chatIds.length} admin(s)`);
       return {
         success: true,
         successCount,
@@ -790,7 +833,9 @@ export async function runDailyRemindersJob(sendMessage, todayOverride = null) {
     
     // Get today's date in Asia/Jakarta
     const today = todayOverride ? getTodayJakarta(todayOverride) : getTodayJakarta();
+
     // STEP 1: Read Orders ONCE (minimal reads)
+    console.log(`📖 [DAILY_REMINDERS] Reading Orders sheet (once)...`);
     const allOrders = await getAllOrders(1000); // Read up to 1000 orders
     
     // Import normalizeEventDate for date normalization
@@ -821,12 +866,15 @@ export async function runDailyRemindersJob(sendMessage, todayOverride = null) {
       }
     }
     
+    console.log(`✅ [DAILY_REMINDERS] Found ${eligibleOrders.length} eligible order(s) for today`);
     
     if (eligibleOrders.length === 0) {
+
       return;
     }
     
     // STEP 2: Read Reminders ONCE (anti-spam + idempotency sets)
+    console.log(`📖 [DAILY_REMINDERS] Reading Reminders sheet (once) for anti-spam and idempotency...`);
     
     // Read ALL reminders (not just today's) to build global per-invoice lock
     const allReminders = await getAllReminders(); // Read all reminders
@@ -839,6 +887,7 @@ export async function runDailyRemindersJob(sendMessage, todayOverride = null) {
       }
     }
     
+    console.log(`✅ [DAILY_REMINDERS] Found ${sentInvoiceSet.size} invoice(s) with SENT reminders (anti-spam lock)`);
     
     // Build idempotency set for today: key = `${order_id}|${reminder_type}|${reminder_date}`
     const sentKeys = new Set();
@@ -850,6 +899,7 @@ export async function runDailyRemindersJob(sendMessage, todayOverride = null) {
       }
     }
     
+    console.log(`✅ [DAILY_REMINDERS] Found ${sentKeys.size} already-processed reminder(s) for today in idempotency set`);
     
     // STEP 3: Process each eligible order
     let sentCount = 0;
@@ -871,12 +921,62 @@ export async function runDailyRemindersJob(sendMessage, todayOverride = null) {
           reminderType = 'H1_PREPARATION';
         }
         
+        // H-3 Auto-cancel logic: If order is not PAID by H-3, cancel it
+        if (daysDiff === 3) {
+          const paymentStatus = (order.payment_status || 'UNPAID').toUpperCase();
+          const isPaid = paymentStatus === 'FULL PAID' || paymentStatus === 'FULLPAID' || paymentStatus === 'PAID';
+          
+          if (!isPaid) {
+            // Auto-cancel order
+            try {
+              const { updateOrderStatus, getTelegramChatIdFromOrder } = await import('./google-sheets.js');
+              await updateOrderStatus(order.id, 'cancelled');
+              
+              console.log(`🚫 [DAILY_REMINDERS] Auto-cancelled order ${order.id} (not paid by H-3)`);
+              
+              // Notify customer via sendMessage function (passed as parameter)
+              try {
+                const { getTelegramChatIdFromOrder } = await import('./order-status-notifications.js');
+                const customerChatId = await getTelegramChatIdFromOrder(order.id);
+                if (customerChatId) {
+                  await sendMessage(
+                    customerChatId,
+                    `❌ **Pesanan Dibatalkan**\n\n` +
+                    `Order ID: \`${order.id}\`\n` +
+                    `Alasan: Pembayaran tidak diterima hingga H-3\n\n` +
+                    `Jika Anda ingin memesan ulang, silakan gunakan perintah /pesan.`
+                  );
+                }
+              } catch (notifyError) {
+                console.warn(`⚠️ [DAILY_REMINDERS] Could not notify customer of cancellation:`, notifyError.message);
+              }
+              
+              // Skip reminder sending for cancelled orders
+              skippedCount++;
+              continue;
+            } catch (cancelError) {
+              console.error(`❌ [DAILY_REMINDERS] Error auto-cancelling order ${order.id}:`, cancelError);
+              // Continue with reminder even if cancellation fails
+            }
+          }
+        }
+        
         if (!reminderType) {
           continue; // Skip if no reminder type determined
         }
         
+        // Skip cancelled/completed orders
+        const orderStatus = (order.status || '').toLowerCase();
+        if (orderStatus === 'cancelled' || orderStatus === 'completed') {
+          console.log(`⏭️ [DAILY_REMINDERS] Skipping ${order.id} ${reminderType} (status: ${orderStatus})`);
+          skippedCount++;
+          continue;
+        }
+        
         // ANTI-SPAM CHECK: If invoice has ANY SENT reminder, skip ALL future reminders
         if (sentInvoiceSet.has(order.id)) {
+
+          console.log(`⏭️ [DAILY_REMINDERS] Skipping ${order.id} ${reminderType} (invoice already has SENT reminder - anti-spam lock)`);
           continue; // Skip without writing to Reminders sheet (quota-friendly)
         }
         
@@ -885,6 +985,7 @@ export async function runDailyRemindersJob(sendMessage, todayOverride = null) {
         
         // Check if already processed today
         if (sentKeys.has(key)) {
+          console.log(`⏭️ [DAILY_REMINDERS] Skipping ${order.id} ${reminderType} (already processed today)`);
           continue;
         }
         
@@ -892,6 +993,7 @@ export async function runDailyRemindersJob(sendMessage, todayOverride = null) {
         if (reminderType === 'H4_PAYMENT') {
           const paymentStatus = (order.payment_status || 'UNPAID').toUpperCase();
           if (paymentStatus === 'FULL PAID' || paymentStatus === 'FULLPAID' || paymentStatus === 'PAID') {
+            console.log(`⏭️ [DAILY_REMINDERS] Skipping ${order.id} ${reminderType} (payment_status: ${paymentStatus})`);
             
             // Append SKIPPED log row
             await saveReminder({
@@ -921,6 +1023,18 @@ export async function runDailyRemindersJob(sendMessage, todayOverride = null) {
           const notes = sendResult.failCount > 0
             ? `Sent to ${sendResult.successCount} admin(s), failed ${sendResult.failCount}`
             : `Sent to ${sendResult.successCount} admin(s)`;
+          
+          // Create Google Calendar event for this reminder
+          try {
+            const { createReminderCalendarEvent } = await import('./google-calendar.js');
+            const calendarEventId = await createReminderCalendarEvent(order, reminderType);
+            if (calendarEventId) {
+              console.log(`✅ [DAILY_REMINDERS] Calendar event created for reminder ${order.id} (${reminderType}): ${calendarEventId}`);
+            }
+          } catch (calendarError) {
+            // Log error but don't fail the reminder sending
+            console.error(`⚠️ [DAILY_REMINDERS] Failed to create calendar event for reminder ${order.id}:`, calendarError.message);
+          }
           
           // Append ONE SENT log row (not per admin)
           await saveReminder({
@@ -958,6 +1072,7 @@ export async function runDailyRemindersJob(sendMessage, todayOverride = null) {
         failedCount++;
       }
     }
+
   } catch (error) {
     console.error('❌ [DAILY_REMINDERS] Fatal error in daily job:', error);
     console.error('❌ [DAILY_REMINDERS] Stack:', error.stack);

@@ -55,6 +55,7 @@ let adminChatIdsInflight = null; // Promise<number[]> (single-flight pattern)
  */
 export function invalidateHeaderCache(sheetName) {
   headerMapCache.delete(sheetName);
+
 }
 
 /**
@@ -268,17 +269,20 @@ export async function getSheetHeaderMap(sheetName, options = {}) {
     const now = Date.now();
     if (cached && (now - cached.fetchedAtMs) < HEADER_MAP_CACHE_TTL_MS) {
       const ageMs = now - cached.fetchedAtMs;
+
       return cached.headerMap;
     }
     
     // Single-flight: If a fetch is already in progress, await the same promise
     if (headerMapInflight.has(cacheKey)) {
+      console.log(`[TRACE header_cache] Orders header source = INFLIGHT (dedupe)`);
       return await headerMapInflight.get(cacheKey);
     }
     
     // Start fetch
     const fetchPromise = (async () => {
       try {
+
         // Read row 1 with explicit wide range to ensure all columns are included
         // Use a wide range (A1:ZZ1) to capture all columns, even if some are empty
         const headerResponse = await retryWithBackoff(async () => {
@@ -317,22 +321,31 @@ export async function getSheetHeaderMap(sheetName, options = {}) {
         
         // Diagnostic logs (only for Orders sheet to avoid spam)
         if (sheetName === 'Orders') {
+
           if (headers.length > 0) {
             const lastHeaders = headers.slice(-5);
+            console.log(`[HEADER_MAP Orders] last_headers=${JSON.stringify(lastHeaders)}`);
             
             // Check event_date header (before headerMap is built)
             const eventDateHeaderRaw = headers.find(h => String(h || '').trim().toLowerCase() === 'event_date');
             const eventDateIndexRaw = headers.findIndex(h => String(h || '').trim().toLowerCase() === 'event_date');
+
+
             // Check if delivery_method is in the headers
             const deliveryMethodIndex = headers.findIndex(h => String(h || '').trim().toLowerCase() === 'delivery_method');
+
             // Also check headerTextMap
+
             if (headerTextMap['delivery_method'] !== undefined) {
+
             }
             
             // Log first 10 and last 10 header names from headerTextMap
             const allHeaderNames = Object.keys(headerTextMap);
             const first10 = allHeaderNames.slice(0, 10);
             const last10 = allHeaderNames.slice(-10);
+            console.log(`[HEADER_MAP Orders] first10_headers=${JSON.stringify(first10)}`);
+            console.log(`[HEADER_MAP Orders] last10_headers=${JSON.stringify(last10)}`);
           }
         }
         
@@ -383,6 +396,7 @@ export async function getSheetHeaderMap(sheetName, options = {}) {
           } else {
             // Log successful mapping for pricing/payment fields
             if (REQUIRED_SNAKE_CASE_COLUMNS.includes(internalKey)) {
+
             }
           }
         }
@@ -392,19 +406,26 @@ export async function getSheetHeaderMap(sheetName, options = {}) {
         
         // Diagnostic logs (only for Orders sheet to avoid spam)
         if (sheetName === 'Orders') {
+
           // Check event_date in headerMap (after it's built)
           const eventDateIndex = headerMap.event_date !== undefined ? headerMap.event_date : -1;
           const eventDateHeaderRaw = eventDateIndex >= 0 && eventDateIndex < headers.length ? headers[eventDateIndex] : '';
+
+
           if (headers.length > 0) {
             const lastHeaders = headers.slice(-5);
+            console.log(`[HEADER_MAP Orders] last_headers=${JSON.stringify(lastHeaders)}`);
           }
           
           // Check if delivery_method is found
           const deliveryMethodIndex = headerMap.delivery_method !== undefined ? headerMap.delivery_method : -1;
+
           // Log first 10 and last 10 header names from headerTextMap
           const allHeaderNames = Object.keys(headerTextMap);
           const first10 = allHeaderNames.slice(0, 10);
           const last10 = allHeaderNames.slice(-10);
+          console.log(`[HEADER_MAP Orders] first10_headers=${JSON.stringify(first10)}`);
+          console.log(`[HEADER_MAP Orders] last10_headers=${JSON.stringify(last10)}`);
         }
         
         // Enforce snake_case requirement for pricing/payment fields
@@ -424,6 +445,7 @@ export async function getSheetHeaderMap(sheetName, options = {}) {
         
         // Log schema enforcement message once per sheet
         if (requireSnakeCase && sheetType === 'Orders') {
+
         }
         
         const result = {
@@ -580,6 +602,7 @@ export async function initializeStorage() {
     if (!SPREADSHEET_ID) {
       throw new Error('GOOGLE_SPREADSHEET_ID is not set in environment variables');
     }
+
     // Check if spreadsheet exists and create sheets if needed
     // Add timeout wrapper to prevent hanging
     const getSpreadsheetPromise = sheets.spreadsheets.get({
@@ -593,12 +616,14 @@ export async function initializeStorage() {
     const spreadsheet = await Promise.race([getSpreadsheetPromise, timeoutPromise]);
 
     const existingSheets = spreadsheet.data.sheets.map(s => s.properties.title);
+    console.log(`🔍 [INIT] Found ${existingSheets.length} existing sheet(s): ${existingSheets.join(', ')}`);
 
     // Track which sheets were just created
     let messagesSheetCreated = false;
     let conversationsSheetCreated = false;
 
     // Create Messages sheet if it doesn't exist
+
     if (!existingSheets.includes(MESSAGES_SHEET)) {
       await sheets.spreadsheets.batchUpdate({
         spreadsheetId: SPREADSHEET_ID,
@@ -616,8 +641,11 @@ export async function initializeStorage() {
     }
 
     // Initialize Messages sheet headers (idempotent - safe to call multiple times)
+
     await ensureMessagesHeaders();
+
     // Create Conversations sheet if it doesn't exist
+
     if (!existingSheets.includes(CONVERSATIONS_SHEET)) {
       await sheets.spreadsheets.batchUpdate({
         spreadsheetId: SPREADSHEET_ID,
@@ -635,8 +663,11 @@ export async function initializeStorage() {
     }
 
     // Initialize Conversations sheet headers (idempotent - safe to call multiple times)
+
     await ensureConversationsHeaders();
+
     // Initialize price list
+
     try {
       await initializePriceList();
     } catch (error) {
@@ -645,20 +676,26 @@ export async function initializeStorage() {
     }
 
     // Initialize waiting list
+
     try {
       await initializeWaitingList();
+
     } catch (error) {
       console.error('⚠️  Error initializing waiting list:', error.message);
       // Don't throw - continue without waiting list
     }
 
     // Initialize Users sheet
+
     try {
       await ensureUsersSheet();
+
     } catch (error) {
       console.error('⚠️  Error initializing Users sheet:', error.message);
       // Don't throw - continue without Users sheet
     }
+
+
   } catch (error) {
     console.error('❌ Error initializing Google Sheets:', error.message);
     console.error('❌ [INIT] Stack:', error.stack);
@@ -728,6 +765,7 @@ async function ensureMessagesHeaders() {
     }
 
     // Headers are missing or incorrect - need to fix
+
     // Get all existing data (if any)
     const allDataResponse = await sheets.spreadsheets.values.get({
       spreadsheetId: SPREADSHEET_ID,
@@ -775,6 +813,7 @@ async function ensureMessagesHeaders() {
         values: [MESSAGES_SCHEMA], // Exactly 8 headers matching schema
       },
     });
+
   } catch (error) {
     console.error('❌ Error ensuring Messages headers:', error.message);
     // Don't throw - allow system to continue
@@ -841,6 +880,7 @@ export async function saveMessage(messageData) {
         values: [row], // Exactly 8 values matching schema
       },
     });
+
     return messageData;
   } catch (error) {
     console.error('❌ Error saving message to Google Sheets:', error.message);
@@ -962,6 +1002,7 @@ export async function ensureOrdersPaymentHeaders() {
         });
       });
       
+      console.log(`✅ Added payment headers (snake_case) to Orders sheet: ${missingHeaders.join(', ')}`);
       
       // Invalidate header cache after adding columns
       invalidateHeaderCache('Orders');
@@ -1019,6 +1060,7 @@ export async function ensureWaitingListPaymentHeaders() {
         },
       });
       
+      console.log(`✅ Added payment headers (snake_case) to WaitingList sheet: ${missingHeaders.join(', ')}`);
     }
   } catch (error) {
     console.error('⚠️ Error ensuring WaitingList payment headers (non-critical):', error.message);
@@ -1052,13 +1094,29 @@ async function computeOrderTotals(orderData, priceList) {
     return noteLower.includes('packaging') || noteLower.includes('styrofoam');
   });
   
-  // Check if packaging is explicitly requested (YA)
+  // Parse packaging override (e.g., "Packaging Styrofoam: 1 box" or "Styrofoam Boxes: 1")
+  let styrofoamBoxesOverride = null;
+  let usePlasticBag = false;
+  
   for (const note of packagingNotes) {
     const noteLower = note.toLowerCase();
-    // Check for "YA" (yes) - could be "Packaging Styrofoam: YA" or "YA" on its own
+    
+    // Check for explicit box count (e.g., "1 box", "2 box", "Packaging Styrofoam: 1 box")
+    const boxCountMatch = noteLower.match(/(\d+)\s*box/i);
+    if (boxCountMatch) {
+      styrofoamBoxesOverride = parseInt(boxCountMatch[1], 10);
+      console.log(`🔍 [COMPUTE_TOTALS] Packaging override detected: ${styrofoamBoxesOverride} box(es)`);
+    }
+    
+    // Check for plastic bag mention (e.g., "sisanya plastic bag", "plastic bag: ya")
+    if (noteLower.includes('plastic bag') || noteLower.includes('sisanya plastic')) {
+      usePlasticBag = true;
+
+    }
+    
+    // Check if packaging is explicitly requested (YA)
     if (noteLower.includes('ya') && !noteLower.includes('tidak')) {
       packagingRequested = true;
-      break;
     }
     // If note contains packaging/styrofoam but no explicit TIDAK, assume yes
     if (!noteLower.includes('tidak')) {
@@ -1072,7 +1130,7 @@ async function computeOrderTotals(orderData, priceList) {
     item.name.toLowerCase().includes('styrofoam')
   );
   
-  if (packagingRequested || packagingInItems) {
+  if (packagingRequested || packagingInItems || styrofoamBoxesOverride !== null) {
     // Calculate total cups from items
     let totalCups = 0;
     (orderData.items || []).forEach(item => {
@@ -1095,14 +1153,30 @@ async function computeOrderTotals(orderData, priceList) {
       }
     });
     
-    // 1 box = 50 cups, Rp 40,000 per box
-    if (totalCups > 0) {
-      const boxes = Math.ceil(totalCups / 50);
-      packagingFee = boxes * 40000;
+    // Use override if provided, otherwise calculate default
+    let boxes = 0;
+    if (styrofoamBoxesOverride !== null) {
+      boxes = styrofoamBoxesOverride;
+    } else if (totalCups > 0) {
+      boxes = Math.ceil(totalCups / 50);
     } else {
       // If no cups detected but packaging requested, assume 1 box
-      packagingFee = 40000;
+      boxes = 1;
     }
+    
+    // Calculate packaging fee (only styrofoam boxes, plastic bag is free)
+    packagingFee = boxes * 40000;
+    
+    // Store packaging plan for transparency
+    const packagingPlan = {
+      styrofoam_boxes: boxes,
+      plastic_bags: usePlasticBag,
+      total_cups: totalCups,
+    };
+    // Store in orderData for later saving (will be stored in notes_json or a dedicated column)
+    orderData.packaging_plan = JSON.stringify(packagingPlan);
+    
+    console.log(`🔍 [COMPUTE_TOTALS] Total cups: ${totalCups}, Boxes: ${boxes}${styrofoamBoxesOverride !== null ? ' (override)' : ''}, Plastic bag: ${usePlasticBag ? 'YES' : 'NO'}, Packaging fee: Rp ${packagingFee}`);
   }
   
     // Delivery fee (from orderData.delivery_fee, default 0)
@@ -1110,6 +1184,7 @@ async function computeOrderTotals(orderData, priceList) {
     const deliveryFee = orderData.delivery_fee !== null && orderData.delivery_fee !== undefined 
       ? (typeof orderData.delivery_fee === 'number' ? orderData.delivery_fee : parseFloat(orderData.delivery_fee) || 0)
       : 0;
+
   // Total amount (canonical - replaces final_total)
   const totalAmount = productTotal + packagingFee + deliveryFee;
   
@@ -1127,6 +1202,7 @@ async function computeOrderTotals(orderData, priceList) {
   const { calculateRemainingBalance } = await import('./payment-tracker.js');
   const remainingBalance = calculateRemainingBalance(totalAmount, paidAmount);
   
+  console.log(`🔍 [COMPUTE_TOTALS] Using total_amount column (canonical)`);
   
   return {
     productTotal,
@@ -1157,6 +1233,7 @@ export async function saveOrder(orderData, options = {}) {
       throw new Error('Missing order_id: Failed to generate order ID before saving order');
     }
     orderData.id = orderId;
+
     // Normalize event_date to YYYY-MM-DD format before saving
     const { normalizeEventDate } = await import('./date-utils.js');
     const originalEventDate = orderData.event_date;
@@ -1164,6 +1241,7 @@ export async function saveOrder(orderData, options = {}) {
       try {
         orderData.event_date = normalizeEventDate(orderData.event_date);
         if (orderData.event_date !== originalEventDate) {
+
         }
       } catch (error) {
         console.error(`❌ [SAVE_ORDER] Failed to normalize event_date "${originalEventDate}":`, error.message);
@@ -1178,6 +1256,7 @@ export async function saveOrder(orderData, options = {}) {
       try {
         orderData.delivery_time = normalizeDeliveryTime(orderData.delivery_time);
         if (orderData.delivery_time !== originalDeliveryTime) {
+
         }
       } catch (error) {
         console.error(`❌ [SAVE_ORDER] Failed to normalize delivery_time "${originalDeliveryTime}":`, error.message);
@@ -1608,6 +1687,7 @@ export async function getPriceList() {
         activeCount++;
       }
     }
+
     return priceList;
   } catch (error) {
     console.error('❌ Error getting price list:', error.message);
@@ -1624,12 +1704,14 @@ export async function initializePriceList() {
     if (!SPREADSHEET_ID) {
       throw new Error('GOOGLE_SPREADSHEET_ID not set in .env file');
     }
+
     const spreadsheet = await sheets.spreadsheets.get({
       spreadsheetId: SPREADSHEET_ID,
     });
     const existingSheets = spreadsheet.data.sheets.map(s => s.properties.title);
 
     if (!existingSheets.includes(PRICE_LIST_SHEET)) {
+
       // Create PriceList sheet
       await sheets.spreadsheets.batchUpdate({
         spreadsheetId: SPREADSHEET_ID,
@@ -1643,6 +1725,7 @@ export async function initializePriceList() {
           }],
         },
       });
+
       // Add headers and default prices
       const defaultPrices = [
         ['Pesanan', 'Harga'],
@@ -1666,6 +1749,7 @@ export async function initializePriceList() {
         ['Roti Srikaya Pandan', '5000'],
         ['Packaging Styrofoam', '40000'],
       ];
+
       await sheets.spreadsheets.values.update({
         spreadsheetId: SPREADSHEET_ID,
         range: `${PRICE_LIST_SHEET}!A1:B${defaultPrices.length}`,
@@ -1674,7 +1758,9 @@ export async function initializePriceList() {
           values: defaultPrices,
         },
       });
+
     } else {
+
     }
   } catch (error) {
     console.error('❌ Error initializing price list:', error.message);
@@ -1694,6 +1780,7 @@ export async function initializeWaitingList() {
     const existingSheets = spreadsheet.data.sheets.map(s => s.properties.title);
 
     if (!existingSheets.includes(WAITING_LIST_SHEET)) {
+
       // Create WaitingList sheet
       await sheets.spreadsheets.batchUpdate({
         spreadsheetId: SPREADSHEET_ID,
@@ -1707,6 +1794,7 @@ export async function initializeWaitingList() {
           }],
         },
       });
+
       // Add headers (snake_case only - single source of truth)
       await sheets.spreadsheets.values.update({
         spreadsheetId: SPREADSHEET_ID,
@@ -1744,7 +1832,9 @@ export async function initializeWaitingList() {
         },
       });
 
+      console.log('✅ WaitingList sheet initialized with headers (snake_case)');
     } else {
+
       // Ensure payment headers exist (for existing sheets)
       await ensureWaitingListPaymentHeaders();
     }
@@ -1768,6 +1858,7 @@ export async function saveToWaitingList(orderData, options = {}) {
       throw new Error('Missing order_id: Failed to generate order ID before saving to WaitingList');
     }
     orderData.id = orderId;
+
     // Normalize event_date to YYYY-MM-DD format before saving
     const { normalizeEventDate } = await import('./date-utils.js');
     const originalEventDate = orderData.event_date;
@@ -1775,6 +1866,7 @@ export async function saveToWaitingList(orderData, options = {}) {
       try {
         orderData.event_date = normalizeEventDate(orderData.event_date);
         if (orderData.event_date !== originalEventDate) {
+
         }
       } catch (error) {
         console.error(`❌ [SAVE_WAITING_LIST] Failed to normalize event_date "${originalEventDate}":`, error.message);
@@ -1789,6 +1881,7 @@ export async function saveToWaitingList(orderData, options = {}) {
       try {
         orderData.delivery_time = normalizeDeliveryTime(orderData.delivery_time);
         if (orderData.delivery_time !== originalDeliveryTime) {
+
         }
       } catch (error) {
         console.error(`❌ [SAVE_WAITING_LIST] Failed to normalize delivery_time "${originalDeliveryTime}":`, error.message);
@@ -1800,34 +1893,21 @@ export async function saveToWaitingList(orderData, options = {}) {
     if (!skipDuplicateCheck) {
       const existingRow = await findRowByOrderId(WAITING_LIST_SHEET, orderId);
       if (existingRow) {
+        console.log(`⚠️ [SAVE_WAITING_LIST] Order ${orderId} already exists in WaitingList sheet (row ${existingRow}), skipping duplicate write`);
         // Return existing order data instead of creating duplicate
         const existingOrder = await getOrderById(orderId);
         return existingOrder || orderData;
       }
     }
     
-    // Import calendar functions dynamically to avoid circular dependency
-    const { createCalendarEvent } = await import('./google-calendar.js');
-    
     // Prepare order row (same format as Orders sheet + calendar_event_id)
     const itemsJson = JSON.stringify(orderData.items || []);
     const notesJson = JSON.stringify(orderData.notes || []);
     const totalItems = (orderData.items || []).reduce((sum, item) => sum + (item.quantity || 0), 0);
 
-    // Create calendar event for this order (OPTIONAL - failure does NOT block order saving)
+    // NOTE: Calendar events are now created only when orders are confirmed (in finalizeOrder)
+    // This prevents duplicate calendar events when order is saved to WaitingList and then confirmed
     let calendarEventId = null;
-    try {
-      if (orderData.event_date) {
-        calendarEventId = await createCalendarEvent(orderData);
-        if (calendarEventId) {
-        }
-      }
-    } catch (error) {
-      console.error(`⚠️ [SAVE_WAITING_LIST] Calendar event creation failed for order ${orderId} (non-critical):`, error.message);
-      console.error(`⚠️ [SAVE_WAITING_LIST] Stack:`, error.stack);
-      // Continue saving order even if calendar creation fails (calendar is optional)
-      calendarEventId = null;
-    }
 
     // Ensure payment headers exist before mapping
     await ensureWaitingListPaymentHeaders();
@@ -1877,12 +1957,14 @@ export async function saveToWaitingList(orderData, options = {}) {
     // Build row using header map
     const row = buildRowFromMap(headerMap, dataObject);
     
+    console.log(`🔍 [SAVE_WAITING_LIST] Row prepared with ${row.filter(v => v !== '').length} non-empty values`);
 
     // UPSERT: Check if order exists and update, otherwise append
     const existingRowIndex = await findRowByOrderId(WAITING_LIST_SHEET, orderId);
     
     if (existingRowIndex) {
       // UPDATE existing row
+
       // Build update data for all columns
       const updateData = [];
       for (const [internalKey, columnIndex] of Object.entries(headerMap)) {
@@ -1906,6 +1988,7 @@ export async function saveToWaitingList(orderData, options = {}) {
             data: updateData,
           },
         });
+
       }
     } else {
       // APPEND new row (only if doesn't exist)
@@ -1920,8 +2003,11 @@ export async function saveToWaitingList(orderData, options = {}) {
           values: [row],
         },
       });
+
     }
 
+    console.log(`✅ [SAVE_WAITING_LIST] Order ${orderId} saved to WaitingList successfully (upserted)`);
+    console.log(`🔍 [SAVE_WAITING_LIST] Delivery time: "${orderData.delivery_time}" (normalized)`);
     return { ...orderData, calendar_event_id: calendarEventId };
   } catch (error) {
     console.error('❌ Error saving to waiting list:', error.message);
@@ -1934,6 +2020,7 @@ export async function saveToWaitingList(orderData, options = {}) {
  */
 export async function getWaitingListOrders() {
   try {
+
     // Ensure payment headers exist before mapping
     await ensureWaitingListPaymentHeaders();
     
@@ -1947,6 +2034,7 @@ export async function getWaitingListOrders() {
 
     const rows = response.data.values || [];
     if (rows.length <= 1) {
+      console.log(`⚠️ [GET_WAITING_LIST] No data rows in ${WAITING_LIST_SHEET} (only headers)`);
       return [];
     }
 
@@ -1987,6 +2075,7 @@ export async function getWaitingListOrders() {
         if (eventDate && !/^\d{4}-\d{2}-\d{2}$/.test(eventDate)) {
           try {
             eventDate = normalizeEventDate(eventDate);
+            console.log(`🔍 [GET_WAITING_LIST] Defensively normalized event_date: "${getValue('event_date')}" → "${eventDate}"`);
           } catch (error) {
             console.warn(`⚠️ [GET_WAITING_LIST] Failed to normalize event_date "${getValue('event_date')}":`, error.message);
             // Keep original value if normalization fails
@@ -1997,6 +2086,7 @@ export async function getWaitingListOrders() {
         if (deliveryTime && !/^\d{2}:\d{2}$/.test(deliveryTime)) {
           try {
             deliveryTime = normalizeDeliveryTime(deliveryTime);
+            console.log(`🔍 [GET_WAITING_LIST] Defensively normalized delivery_time: "${getValue('delivery_time')}" → "${deliveryTime}"`);
           } catch (error) {
             console.warn(`⚠️ [GET_WAITING_LIST] Failed to normalize delivery_time "${getValue('delivery_time')}":`, error.message);
             // Keep original value if normalization fails
@@ -2028,6 +2118,7 @@ export async function getWaitingListOrders() {
       }
     }
 
+    console.log(`✅ [GET_WAITING_LIST] Retrieved ${orders.length} order(s) from waiting list`);
     return orders;
   } catch (error) {
     console.error('❌ [GET_WAITING_LIST] Error getting waiting list orders:', error.message);
@@ -2089,6 +2180,7 @@ export async function markReminderSent(orderId) {
     // Find row index using header mapping
     const rowIndex = await findRowByOrderId(WAITING_LIST_SHEET, orderId);
     if (!rowIndex) {
+
       return false;
     }
     
@@ -2114,6 +2206,7 @@ export async function markReminderSent(orderId) {
         values: [['true']],
       },
     });
+
     return true;
   } catch (error) {
     console.error('❌ [MARK_REMINDER_SENT] Error marking reminder as sent:', error.message);
@@ -2170,6 +2263,7 @@ export async function updateOrderStatus(orderId, newStatus) {
         values: [[new Date().toISOString()]],
       },
     });
+
     return true;
   } catch (error) {
     console.error(`❌ [UPDATE_ORDER_STATUS] Error updating order status:`, error.message);
@@ -2188,6 +2282,7 @@ export async function updateOrderStatus(orderId, newStatus) {
  */
 export async function updateOrderPayment(orderId, newPaymentAmount) {
   try {
+
     if (!orderId) {
       throw new Error('Missing order_id: Cannot update payment without order ID');
     }
@@ -2196,6 +2291,7 @@ export async function updateOrderPayment(orderId, newPaymentAmount) {
     
     // Normalize order_id for lookup
     const normalizedOrderId = normalizeOrderId(orderId);
+    console.log(`🔍 [UPDATE_PAYMENT] Looking up order_id: "${normalizedOrderId}" (original: "${orderId}")`);
     
     // Get order to calculate totals and get existing paid amount
     const order = await getOrderById(orderId);
@@ -2205,6 +2301,7 @@ export async function updateOrderPayment(orderId, newPaymentAmount) {
     
     // Use total_amount (canonical) with fallback to final_total (legacy)
     const totalAmount = order.total_amount || order.final_total || 0;
+
     // Validate total_amount exists and is > 0
     if (!totalAmount || totalAmount <= 0) {
       throw new Error('Order total is not set. Please calculate order total first.');
@@ -2224,6 +2321,7 @@ export async function updateOrderPayment(orderId, newPaymentAmount) {
     
     // ACCUMULATE: New total paid = existing + new payment
     const newTotalPaid = existingPaidAmount + newPaymentAmount;
+
     // Calculate remaining balance and payment status
     const remainingBalance = calculateRemainingBalance(totalAmount, newTotalPaid);
     const paymentStatus = calculatePaymentStatus(newTotalPaid, totalAmount);
@@ -2233,8 +2331,11 @@ export async function updateOrderPayment(orderId, newPaymentAmount) {
     if (!dpMinAmount || dpMinAmount <= 0) {
       const { calculateMinDP } = await import('./payment-tracker.js');
       dpMinAmount = calculateMinDP(totalAmount);
+      console.log(`🔍 [UPDATE_PAYMENT] Calculated dp_min_amount: ${dpMinAmount} (50% of ${totalAmount})`);
     } else {
+
     }
+
     // Find row index using header mapping
     const rowIndex = await findRowByOrderId('Orders', orderId);
     if (!rowIndex) {
@@ -2255,6 +2356,7 @@ export async function updateOrderPayment(orderId, newPaymentAmount) {
           range: `Orders!${col}${rowIndex}`,
           values: [[value]],
         });
+        console.log(`🔍 [UPDATE_PAYMENT] Updating column "${internalKey}" (${col}${rowIndex}) = ${value}`);
         return true;
       }
       console.warn(`⚠️ [UPDATE_PAYMENT] Column "${internalKey}" not found in header map, skipping update`);
@@ -2273,6 +2375,7 @@ export async function updateOrderPayment(orderId, newPaymentAmount) {
     
     updateColumn('updated_at', new Date().toISOString());
     
+    console.log(`🔍 [UPDATE_PAYMENT] Prepared ${updateData.length} column update(s)`);
 
     if (updateData.length > 0) {
       await sheets.spreadsheets.values.batchUpdate({
@@ -2284,6 +2387,7 @@ export async function updateOrderPayment(orderId, newPaymentAmount) {
       });
     }
 
+    console.log(`✅ [UPDATE_PAYMENT] Order ${orderId} payment updated: +${newPaymentAmount} (Total Paid: ${newTotalPaid}, Status: ${paymentStatus}, Remaining: ${remainingBalance})`);
     return {
       orderId,
       paidAmount: newTotalPaid, // Return accumulated total
@@ -2300,10 +2404,84 @@ export async function updateOrderPayment(orderId, newPaymentAmount) {
 }
 
 /**
+ * Update order payment with evidence (photo/document)
+ * Similar to updateOrderPayment but stores evidence file_id
+ * @param {string} orderId - Order ID
+ * @param {number} paymentAmount - Payment amount (auto-calculated from order)
+ * @param {string} evidenceFileId - Telegram file_id of evidence
+ * @param {string} evidenceType - Type of evidence ('photo' or 'document')
+ * @param {number} telegramMessageId - Telegram message ID
+ * @returns {Object} Updated payment info
+ */
+export async function updateOrderPaymentWithEvidence(orderId, paymentAmount, evidenceFileId, evidenceType, telegramMessageId) {
+  try {
+
+    // First update payment (same as regular updateOrderPayment)
+    const paymentResult = await updateOrderPayment(orderId, paymentAmount);
+    
+    // Store evidence reference (in notes_json or a dedicated column if available)
+    // For now, append to notes_json as JSON
+    const order = await getOrderById(orderId);
+    if (order) {
+      const rowIndex = await findRowByOrderId('Orders', orderId);
+      if (rowIndex) {
+        const headerMap = await getSheetHeaderMap('Orders', { requireSnakeCase: true, sheetType: 'Orders' });
+        
+        // Get existing notes
+        let notes = [];
+        try {
+          const notesJson = order.notes_json || order.notes;
+          if (typeof notesJson === 'string') {
+            notes = JSON.parse(notesJson);
+          } else if (Array.isArray(notesJson)) {
+            notes = notesJson;
+          }
+        } catch (e) {
+          // If parsing fails, start with empty array
+          notes = [];
+        }
+        
+        // Add evidence note
+        const evidenceNote = {
+          type: 'payment_evidence',
+          file_id: evidenceFileId,
+          evidence_type: evidenceType,
+          telegram_message_id: telegramMessageId,
+          timestamp: new Date().toISOString(),
+        };
+        notes.push(evidenceNote);
+        
+        // Update notes_json column
+        const notesColIndex = headerMap.notes_json;
+        if (notesColIndex !== undefined) {
+          const col = columnIndexToLetter(notesColIndex);
+          await sheets.spreadsheets.values.update({
+            spreadsheetId: SPREADSHEET_ID,
+            range: `Orders!${col}${rowIndex}`,
+            valueInputOption: 'RAW',
+            requestBody: {
+              values: [[JSON.stringify(notes)]],
+            },
+          });
+
+        }
+      }
+    }
+    
+    return paymentResult;
+  } catch (error) {
+    console.error(`❌ [UPDATE_PAYMENT_EVIDENCE] Error updating payment with evidence:`, error.message);
+    console.error(`❌ [UPDATE_PAYMENT_EVIDENCE] Stack:`, error.stack);
+    throw error;
+  }
+}
+
+/**
  * Update waiting list order status
  */
 export async function updateWaitingListOrderStatus(orderId, newStatus) {
   try {
+
     if (!orderId) {
       throw new Error('Missing order_id: Cannot update waiting list order status without order ID');
     }
@@ -2382,6 +2560,7 @@ export async function updateWaitingListOrderStatus(orderId, newStatus) {
           status: newStatus,
         };
         await updateCalendarEvent(calendarEventId, order);
+
       } catch (error) {
         console.error(`⚠️ [UPDATE_WAITING_LIST_STATUS] Error updating calendar event for order ${orderId} (non-critical):`, error.message);
         console.error(`⚠️ [UPDATE_WAITING_LIST_STATUS] Stack:`, error.stack);
@@ -2424,6 +2603,7 @@ export async function updateWaitingListOrderStatus(orderId, newStatus) {
         },
       });
     }
+
     return true;
   } catch (error) {
     console.error(`❌ [UPDATE_WAITING_LIST_STATUS] Error updating waiting list order status:`, error.message);
@@ -2438,18 +2618,24 @@ export async function updateWaitingListOrderStatus(orderId, newStatus) {
  */
 export async function getAllOrders(limit = 100) {
   try {
+
     // Get header map using alias-based mapping (enforce snake_case for Orders)
     const headerMap = await getSheetHeaderMap('Orders', { requireSnakeCase: true, sheetType: 'Orders' });
     
     // Log header map info for event_date
     const eventDateIndex = headerMap.event_date;
+
+
     // Log first and last headers for verification
     if (headerMap.__headersLength > 0) {
       const firstHeaders = Object.keys(headerMap).filter(k => !k.startsWith('__')).slice(0, 10);
       const lastHeaders = Object.keys(headerMap).filter(k => !k.startsWith('__')).slice(-10);
+      console.log(`[HEADER_MAP Orders] first10_headers=${JSON.stringify(firstHeaders)}`);
+      console.log(`[HEADER_MAP Orders] last10_headers=${JSON.stringify(lastHeaders)}`);
     }
     
     const range = `Orders!A:${columnIndexToLetter(headerMap.__headersLength - 1)}`;
+
     // Read extended range to include all columns
     const response = await retryWithBackoff(async () => {
       return await sheets.spreadsheets.values.get({
@@ -2460,6 +2646,7 @@ export async function getAllOrders(limit = 100) {
 
     const rows = response.data.values || [];
     if (rows.length <= 1) {
+      console.log(`⚠️ [GET_ALL_ORDERS] No data rows found (only headers)`);
       return [];
     }
     
@@ -2468,6 +2655,7 @@ export async function getAllOrders(limit = 100) {
       for (let i = 1; i < Math.min(6, rows.length); i++) {
         const row = rows[i];
         const eventDateRaw = row[eventDateIndex] || '';
+
       }
     }
 
@@ -2544,6 +2732,7 @@ export async function getAllOrders(limit = 100) {
           const finalTotalVal = getValue('final_total', '0');
           const parsed = typeof finalTotalVal === 'string' ? parseFloat(finalTotalVal.replace(/[.,]/g, '')) || 0 : parseFloat(finalTotalVal) || 0;
           if (parsed > 0) {
+            console.log(`🔍 [SCHEMA] final_total fallback used (READ only) for order ${getValue('order_id', 'unknown')}`);
           }
           return parsed;
         })(),
@@ -2675,8 +2864,10 @@ export async function findRowByOrderId(sheetName, orderId) {
     }
 
     if (foundRow) {
+      console.log(`✅ [LOOKUP] Order ${normalizedInputId} found in ${sheetName} at row ${foundRow} (scanned ${rows.length - 1} rows)`);
       return foundRow;
     }
+
     return null;
   } catch (error) {
     console.error(`❌ [FIND_ROW] Error finding row by Order ID in ${sheetName}:`, error.message);
@@ -2778,6 +2969,7 @@ async function ensureConversationsHeaders() {
     }
 
     // Headers are missing or incorrect - need to fix
+
     // Get all existing data (if any)
     const allDataResponse = await sheets.spreadsheets.values.get({
       spreadsheetId: SPREADSHEET_ID,
@@ -2825,6 +3017,7 @@ async function ensureConversationsHeaders() {
         values: [CONVERSATIONS_SCHEMA], // Exactly 7 headers matching schema
       },
     });
+
   } catch (error) {
     console.error('❌ Error ensuring Conversations headers:', error.message);
     // Don't throw - allow system to continue
@@ -2942,6 +3135,7 @@ export async function getOrCreateConversation(telegramChatId, fromName, fromId) 
         values: [newRow], // Exactly 7 values matching schema
       },
     });
+
     return {
       id: conversationId,
       external_user_id: String(telegramChatId),
@@ -3091,6 +3285,7 @@ export async function getAllConversations(limit = 50) {
     try {
       allMessages = await getAllMessages(1000);
     } catch (error) {
+
       // Continue without message stats
     }
 
@@ -3181,6 +3376,7 @@ export async function ensureUsersSheet() {
           }],
         },
       });
+
     }
     
     // Ensure headers exist (idempotent)
@@ -3231,6 +3427,7 @@ async function ensureUsersHeaders() {
           values: [USERS_SCHEMA],
         },
       });
+
       return;
     }
 
@@ -3280,6 +3477,7 @@ async function ensureUsersHeaders() {
     }
 
     // Append missing columns to the right
+    console.log(`🔄 Adding ${missingColumns.length} missing column(s) to Users sheet...`);
     
     // Find the last column index
     const lastColumnIndex = existingHeaders.length;
@@ -3309,6 +3507,7 @@ async function ensureUsersHeaders() {
       },
     });
 
+    console.log(`✅ Added missing columns to Users sheet: ${headersToAppend.join(', ')}`);
   } catch (error) {
     console.error('❌ Error ensuring Users headers:', error.message);
     throw error;
@@ -3374,6 +3573,7 @@ export async function getUserRole(platform, userId) {
       
       if (userIdMatch && platformMatch && rowIsActive) {
         const role = row[roleCol] || 'customer';
+
         return role;
       }
     }
@@ -3480,6 +3680,7 @@ export async function upsertUserRole(platform, userId, displayName, role, isActi
           values: [rowData],
         },
       });
+
     } else {
       // Insert new user
       await sheets.spreadsheets.values.append({
@@ -3491,6 +3692,7 @@ export async function upsertUserRole(platform, userId, displayName, role, isActi
           values: [rowData],
         },
       });
+
     }
   } catch (error) {
     console.error('❌ Error upserting user role:', error.message);
@@ -3511,11 +3713,13 @@ export async function getAdminChatIds() {
     // Check cache first
     const now = Date.now();
     if (adminChatIdsCache && (now - adminChatIdsCache.fetchedAtMs) < ADMIN_CHAT_IDS_CACHE_TTL_MS) {
+      console.log(`[ADMIN_RECIPIENTS] Using cached admin chat IDs (age: ${Math.round((now - adminChatIdsCache.fetchedAtMs) / 1000)}s)`);
       return adminChatIdsCache.chatIds;
     }
     
     // Single-flight: if a fetch is in progress, await the same promise
     if (adminChatIdsInflight) {
+
       return await adminChatIdsInflight;
     }
     
@@ -3537,6 +3741,7 @@ export async function getAdminChatIds() {
           // Only headers, no users
           const result = [];
           adminChatIdsCache = { chatIds: result, fetchedAtMs: Date.now() };
+          console.log(`[ADMIN_RECIPIENTS] count=0 (no users in sheet)`);
           return result;
         }
         
@@ -3588,6 +3793,7 @@ export async function getAdminChatIds() {
         
         // Cache result
         adminChatIdsCache = { chatIds, fetchedAtMs: Date.now() };
+
         return chatIds;
       } finally {
         // Clear inflight promise
@@ -3612,6 +3818,7 @@ export async function getAdminChatIds() {
  */
 export function invalidateAdminChatIdsCache() {
   adminChatIdsCache = null;
+
 }
 
 /**
@@ -3622,6 +3829,7 @@ export function invalidateAdminChatIdsCache() {
  */
 export async function migrateSheetHeadersToSnakeCase(sheetName) {
   try {
+
     // Read current headers
     const headerResponse = await sheets.spreadsheets.values.get({
       spreadsheetId: SPREADSHEET_ID,
@@ -3631,9 +3839,11 @@ export async function migrateSheetHeadersToSnakeCase(sheetName) {
     const currentHeaders = headerResponse.data.values?.[0] || [];
     
     if (currentHeaders.length === 0) {
+
       return;
     }
     
+    console.log(`📋 [MIGRATE] Current headers (${currentHeaders.length}):`, currentHeaders);
     
     // Normalize headers to snake_case
     const normalizedHeaders = currentHeaders.map(header => {
@@ -3648,6 +3858,7 @@ export async function migrateSheetHeadersToSnakeCase(sheetName) {
       }
       return normalized;
     });
+
     // Check if any headers changed
     const hasChanges = currentHeaders.some((header, index) => {
       const normalized = normalizedHeaders[index];
@@ -3655,6 +3866,7 @@ export async function migrateSheetHeadersToSnakeCase(sheetName) {
     });
     
     if (!hasChanges) {
+
       return;
     }
     
@@ -3670,9 +3882,12 @@ export async function migrateSheetHeadersToSnakeCase(sheetName) {
         values: [normalizedHeaders],
       },
     });
+
+
     currentHeaders.forEach((oldHeader, index) => {
       const newHeader = normalizedHeaders[index];
       if (oldHeader !== newHeader) {
+
       }
     });
     
@@ -3689,10 +3904,15 @@ export async function migrateSheetHeadersToSnakeCase(sheetName) {
  */
 export async function migrateAllSheetsToSnakeCase() {
   try {
+
+
+
     // Migrate each sheet
     await migrateSheetHeadersToSnakeCase('Orders');
     await migrateSheetHeadersToSnakeCase('WaitingList');
     await migrateSheetHeadersToSnakeCase('Reminders');
+
+
   } catch (error) {
     console.error('\n❌ [MIGRATE] Migration failed:', error.message);
     console.error(`❌ [MIGRATE] Stack:`, error.stack);
@@ -3708,6 +3928,7 @@ export async function migrateAllSheetsToSnakeCase() {
  */
 export async function migrateDateAndTimeFormats(sheetName) {
   try {
+
     // Get header map
     const headerMap = await getSheetHeaderMap(sheetName, { requireSnakeCase: false });
     const eventDateColIndex = headerMap.event_date;
@@ -3715,6 +3936,7 @@ export async function migrateDateAndTimeFormats(sheetName) {
     const reminderDateColIndex = headerMap.reminder_date; // For Reminders sheet
     
     if (eventDateColIndex === undefined && reminderDateColIndex === undefined) {
+
       return { updated: 0, skipped: 0, errors: 0 };
     }
     
@@ -3726,9 +3948,11 @@ export async function migrateDateAndTimeFormats(sheetName) {
     
     const rows = response.data.values || [];
     if (rows.length <= 1) {
+
       return { updated: 0, skipped: 0, errors: 0 };
     }
     
+    console.log(`📋 [MIGRATE_DT] Found ${rows.length - 1} data row(s) in ${sheetName}`);
     
     const { normalizeEventDate } = await import('./date-utils.js');
     const { normalizeDeliveryTime } = await import('./price-calculator.js');
@@ -3757,6 +3981,7 @@ export async function migrateDateAndTimeFormats(sheetName) {
               range: `${sheetName}!${col}${rowIndex}`,
               values: [[normalized]],
             });
+
             rowUpdated = true;
           } catch (error) {
             console.error(`  ❌ Row ${rowIndex}: Failed to normalize event_date "${originalEventDate}":`, error.message);
@@ -3780,6 +4005,7 @@ export async function migrateDateAndTimeFormats(sheetName) {
               range: `${sheetName}!${col}${rowIndex}`,
               values: [[normalized]],
             });
+
             rowUpdated = true;
           } catch (error) {
             console.error(`  ❌ Row ${rowIndex}: Failed to normalize reminder_date "${originalReminderDate}":`, error.message);
@@ -3803,6 +4029,7 @@ export async function migrateDateAndTimeFormats(sheetName) {
               range: `${sheetName}!${col}${rowIndex}`,
               values: [[normalized]],
             });
+
             rowUpdated = true;
           } catch (error) {
             console.error(`  ❌ Row ${rowIndex}: Failed to normalize delivery_time "${originalDeliveryTime}":`, error.message);
@@ -3830,8 +4057,13 @@ export async function migrateDateAndTimeFormats(sheetName) {
             data: batch,
           },
         });
+        console.log(`  ✅ Applied batch ${Math.floor(i / batchSize) + 1} (${batch.length} update(s))`);
       }
     }
+
+    console.log(`   - Updated: ${updatedCount} row(s)`);
+    console.log(`   - Skipped (already normalized): ${skippedCount} row(s)`);
+    console.log(`   - Errors: ${errorCount} row(s)`);
     
     return { updated: updatedCount, skipped: skippedCount, errors: errorCount };
     
@@ -3848,12 +4080,18 @@ export async function migrateDateAndTimeFormats(sheetName) {
  */
 export async function migrateAllSheetsDateAndTime() {
   try {
+
+
+
     const results = {
       Orders: await migrateDateAndTimeFormats('Orders'),
       WaitingList: await migrateDateAndTimeFormats('WaitingList'),
       Reminders: await migrateDateAndTimeFormats('Reminders'),
     };
+
+
     Object.entries(results).forEach(([sheetName, stats]) => {
+
     });
     
     return results;
@@ -3873,6 +4111,7 @@ export async function migrateAllSheetsDateAndTime() {
  */
 export async function detectDuplicateOrders(sheetName) {
   try {
+
     const headerMap = await getSheetHeaderMap(sheetName, { requireSnakeCase: false });
     const orderIdColumnIndex = headerMap.order_id;
     
@@ -3889,6 +4128,7 @@ export async function detectDuplicateOrders(sheetName) {
     
     const rows = response.data.values || [];
     if (rows.length <= 1) {
+      console.log(`✅ [DUPLICATE_DETECTOR] No data rows in ${sheetName} (only headers)`);
       return [];
     }
     
@@ -3920,6 +4160,7 @@ export async function detectDuplicateOrders(sheetName) {
     }
     
     if (duplicates.length === 0) {
+
     } else {
       console.error(`❌ [DUPLICATE_DETECTOR] Found ${duplicates.length} duplicate order(s) in ${sheetName}`);
     }
@@ -3939,6 +4180,7 @@ export async function detectDuplicateOrders(sheetName) {
  */
 export async function reportLegacyTitleCaseColumns(sheetName) {
   try {
+
     const headerResponse = await sheets.spreadsheets.values.get({
       spreadsheetId: SPREADSHEET_ID,
       range: `${sheetName}!1:1`,
@@ -3961,11 +4203,18 @@ export async function reportLegacyTitleCaseColumns(sheetName) {
     });
     
     if (legacyColumns.length === 0) {
+
       return { sheetName, legacyColumns: [] };
     }
     
+    console.log(`\n⚠️ [LEGACY_REPORT] Found ${legacyColumns.length} legacy Title Case column(s) in ${sheetName}:`);
     legacyColumns.forEach(col => {
+
     });
+
+
+    console.log(`   Data should be stored ONLY in snake_case columns (e.g., "product_total", not "Product Total").`);
+    console.log(`   To delete: Select column ${legacyColumns.map(c => c.letter).join(', ')} in Google Sheets and delete.`);
     
     return {
       sheetName,

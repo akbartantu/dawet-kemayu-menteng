@@ -94,7 +94,7 @@ export function formatPaymentStatusMessage(order) {
   const minDP = calculateMinDP(totalAmount);
 
   let message = `💰 **STATUS PEMBAYARAN**\n\n`;
-  message += `📋 Order ID: ${orderId}\n`;
+  message += `📋 Order ID: \`${orderId}\`\n`;
   message += `💵 Total: Rp ${formatRupiah(totalAmount)}\n`;
   message += `💳 Total Dibayar: Rp ${formatRupiah(paidAmount)}\n`;
   message += `📊 Sisa: Rp ${formatRupiah(remainingBalance)}\n\n`;
@@ -192,4 +192,56 @@ export function validatePaymentStatusTransition(currentStatus, newStatus) {
   }
 
   return { valid: true };
+}
+
+/**
+ * Detect suspicious payment amounts (typo mitigation)
+ * @param {number} expectedAmount - Expected total amount
+ * @param {number} enteredAmount - User-entered amount
+ * @returns {Object} { isSuspicious: boolean, reason?: string }
+ */
+export function detectSuspiciousPayment(expectedAmount, enteredAmount) {
+  if (!expectedAmount || expectedAmount <= 0) {
+    return { isSuspicious: false };
+  }
+  
+  if (!enteredAmount || enteredAmount <= 0) {
+    return { isSuspicious: false };
+  }
+  
+  const ratio = enteredAmount / expectedAmount;
+  
+  // Rule 1: Amount >= 1.5x expected (50% over)
+  if (ratio >= 1.5) {
+    return {
+      isSuspicious: true,
+      reason: `Jumlah pembayaran (Rp ${formatRupiah(enteredAmount)}) lebih besar dari total yang diharapkan (Rp ${formatRupiah(expectedAmount)}).`
+    };
+  }
+  
+  // Rule 2: Amount <= 0.5x expected (50% under)
+  if (ratio <= 0.5) {
+    return {
+      isSuspicious: true,
+      reason: `Jumlah pembayaran (Rp ${formatRupiah(enteredAmount)}) lebih kecil dari total yang diharapkan (Rp ${formatRupiah(expectedAmount)}).`
+    };
+  }
+  
+  // Rule 3: Order of magnitude off (ratio >= 9 or <= 0.11)
+  if (ratio >= 9 || ratio <= 0.11) {
+    return {
+      isSuspicious: true,
+      reason: `Jumlah pembayaran tampaknya memiliki kesalahan ketik (perbedaan terlalu besar).`
+    };
+  }
+  
+  // Rule 4: Extra zero group (heuristic: ratio is exactly 10 or 0.1)
+  if (ratio === 10 || ratio === 0.1) {
+    return {
+      isSuspicious: true,
+      reason: `Jumlah pembayaran mungkin memiliki nol ekstra atau kurang.`
+    };
+  }
+  
+  return { isSuspicious: false };
 }

@@ -155,11 +155,13 @@ export function getUnitPriceFromPriceList(itemName, priceList) {
   }
   
   const normalizedItemName = normalizeProductName(itemName);
+  console.log(`🔍 [PRICE] Looking up price for item: "${itemName}" (normalized: "${normalizedItemName}")`);
   
   // Strategy A: Exact match on normalized name
   for (const [priceListKey, price] of Object.entries(priceList)) {
     const normalizedKey = normalizeProductName(priceListKey);
     if (normalizedKey === normalizedItemName) {
+
       return price;
     }
   }
@@ -192,6 +194,7 @@ export function getUnitPriceFromPriceList(itemName, priceList) {
       }
       
       if (matches && normalizedKey.includes('dawet')) {
+
         return price;
       }
     }
@@ -203,11 +206,13 @@ export function getUnitPriceFromPriceList(itemName, priceList) {
     if (parsed.base) {
       const basePrice = priceList[parsed.base] || null;
       if (basePrice) {
+
         // Add topping prices if any
         let totalPrice = basePrice;
         for (const topping of parsed.toppings) {
           const toppingPrice = priceList[topping] || 0;
           if (toppingPrice > 0) {
+
             totalPrice += toppingPrice;
           }
         }
@@ -231,6 +236,7 @@ export function calculateOrderTotal(items, priceList) {
   const itemDetails = [];
   
   for (const item of items) {
+
     // Use improved price lookup with normalization
     let unitPrice = getUnitPriceFromPriceList(item.name, priceList);
     let parsed = null;
@@ -253,6 +259,7 @@ export function calculateOrderTotal(items, priceList) {
           toppingPrices = parsed.toppings.map(topping => {
             const toppingPrice = priceList[topping] || 0;
             if (toppingPrice > 0) {
+
             }
             return toppingPrice;
           });
@@ -268,6 +275,7 @@ export function calculateOrderTotal(items, priceList) {
     let itemTotal = 0;
     if (unitPrice !== null && unitPrice > 0) {
       itemTotal = unitPrice * item.quantity;
+
     } else {
       console.warn(`⚠️ [PRICE] Price not found for item: "${item.name}" - will show "Harga belum tersedia"`);
     }
@@ -375,6 +383,7 @@ export function normalizeDeliveryTime(timeStr) {
   
   // Format as HH:MM
   const formatted = `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`;
+
   return formatted;
 }
 
@@ -417,10 +426,12 @@ export function formatInvoice(order, priceList, options = {}) {
   let daysDiff = null;
   if (order.event_date) {
     daysDiff = getDaysDiffJakarta(order.event_date, todayDateOverride);
+
   }
   
-  // Choose template: FULL PAYMENT if days_diff < 4, DP if days_diff >= 4
-  const useFullPaymentFormat = daysDiff !== null && daysDiff < 4;
+  // Choose template: FULL PAYMENT if days_diff <= 4 (includes H-4), DP if days_diff > 4
+  // H-4 (daysDiff === 4) requires full payment, so use full payment format
+  const useFullPaymentFormat = daysDiff !== null && daysDiff <= 4;
   
   if (useFullPaymentFormat) {
     return formatFullPaymentRecap(order, priceList);
@@ -506,10 +517,12 @@ function formatFullPaymentRecap(order, priceList) {
       shippingPrice = parsedFee;
     }
   }
+
   order._delivery_fee_source = deliveryFeeSource;
   const totalAmount = order.total_amount || order.final_total || subtotal + packagingPrice + shippingPrice;
   // Use delivery_method (stored in Orders.delivery_method) with fallback for backward compatibility
   const pengiriman = order.delivery_method || order.shipping_method || '-';
+
   // Build item list
   let itemList = '';
   calculation.itemDetails.forEach((detail) => {
@@ -533,7 +546,7 @@ function formatFullPaymentRecap(order, priceList) {
   // Build FULL PAYMENT invoice (no DP section)
   let invoice = `🧾 REKAP PESANAN & PEMBAYARAN\n`;
   invoice += `Dawet Kemayu Menteng 🌿\n\n`;
-  invoice += `Nomor Invoice:\n${invoiceNumber}\n\n`;
+  invoice += `Nomor Invoice:\n\`${invoiceNumber}\`\n\n`;
   invoice += `--------------------------------\n`;
   invoice += `👤 INFORMASI PEMESAN\n`;
   invoice += `Nama Pemesan: ${namaPemesan}\n`;
@@ -657,11 +670,13 @@ function formatDPRecap(order, priceList) {
       shippingPrice = parsedFee;
     }
   }
+
   order._delivery_fee_source = deliveryFeeSource;
   const totalAmount = order.total_amount || order.final_total || subtotal + packagingPrice + shippingPrice;
   const dpMinimum = calculateMinDP(totalAmount);
   // Use delivery_method (stored in Orders.delivery_method) with fallback for backward compatibility
   const pengiriman = order.delivery_method || order.shipping_method || '-';
+
   // Build item list
   let itemList = '';
   calculation.itemDetails.forEach((detail) => {
@@ -685,7 +700,7 @@ function formatDPRecap(order, priceList) {
   // Build DP invoice (with DP section)
   let invoice = `🧾 REKAP PESANAN & PEMBAYARAN\n`;
   invoice += `Dawet Kemayu Menteng 🌿\n\n`;
-  invoice += `Nomor Invoice:\n${invoiceNumber}\n\n`;
+  invoice += `Nomor Invoice:\n\`${invoiceNumber}\`\n\n`;
   invoice += `--------------------------------\n`;
   invoice += `👤 INFORMASI PEMESAN\n`;
   invoice += `Nama Pemesan: ${namaPemesan}\n`;
@@ -759,6 +774,7 @@ export function separateItemsFromNotes(items, notes, priceList) {
           quantity: 1,
           name: priceListKey, // Use the exact name from price list
         });
+        console.log(`📦 Moved "${note}" from notes to items (exact match: "${priceListKey}")`);
         found = true;
         break;
       }
@@ -792,6 +808,7 @@ export function separateItemsFromNotes(items, notes, priceList) {
             quantity: 1,
             name: priceListKey,
           });
+          console.log(`📦 Moved "${note}" from notes to items (match: "${priceListKey}")`);
           found = true;
           break;
         }
@@ -801,6 +818,7 @@ export function separateItemsFromNotes(items, notes, priceList) {
     if (!found) {
       // Keep as note
       finalNotes.push(note);
+      console.log(`📝 Keeping "${note}" as note (not found in price list)`);
     }
   }
   
@@ -902,8 +920,9 @@ function formatDownPaymentMessage(order, totalAmount, downPayment, daysUntil) {
   // Do NOT escape date - dates in YYYY-MM-DD format are safe in Telegram Markdown
   const eventDate = order.event_date || '-';
   const deliveryTime = formatTime(order.delivery_time);
+
   let message = `💰 **PEMBAYARAN DP (Down Payment)**\n\n`;
-  message += `📋 **Order ID:** ${orderId}\n`;
+  message += `📋 **Order ID:** \`${orderId}\`\n`;
   message += `👤 **Customer:** ${customerName}\n`;
   message += `📅 **Tanggal Pengiriman:** ${eventDate}\n`;
   message += `Waktu Kirim: ${deliveryTime}\n\n`;
@@ -929,8 +948,9 @@ function formatFullPaymentMessage(order, totalAmount, daysUntil = null) {
   // Do NOT escape date - dates in YYYY-MM-DD format are safe in Telegram Markdown
   const eventDate = order.event_date || '-';
   const deliveryTime = formatTime(order.delivery_time);
+
   let message = `💰 **PEMBAYARAN PENUH**\n\n`;
-  message += `📋 **Order ID:** ${orderId}\n`;
+  message += `📋 **Order ID:** \`${orderId}\`\n`;
   message += `👤 **Customer:** ${customerName}\n`;
   message += `📅 **Tanggal Pengiriman:** ${eventDate}\n`;
   message += `Waktu Kirim: ${deliveryTime}\n\n`;
