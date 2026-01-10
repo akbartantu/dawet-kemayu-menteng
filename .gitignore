@@ -1,0 +1,37 @@
+# Node modules
+node_modules/
+npm-debug.log*
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+
+# Service account keys
+service-account-key*.json
+!service-account-key-test.json
+
+# Test images
+*.jpg
+*.png
+*.jpeg
+!test-images/
+
+# Logs
+logs/
+*.log
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+
+# Temporary files
+*.tmp
+*.temp
+
+# Training data (large files)
+*.traineddata
