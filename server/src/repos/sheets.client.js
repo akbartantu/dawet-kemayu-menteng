@@ -6,6 +6,7 @@
 import { google } from 'googleapis';
 import dotenv from 'dotenv';
 import path from 'path';
+import fs from 'fs';
 import { fileURLToPath } from 'url';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -20,51 +21,68 @@ if (process.env.NODE_ENV !== 'production' || !process.env.RENDER) {
 }
 
 // Google Sheets API setup
-// Support both file-based (local) and environment variable-based (Render) authentication
+// Support both file-based (Render Secret Files) and environment variable-based authentication
 let auth;
-if (process.env.GOOGLE_SERVICE_ACCOUNT_KEY) {
-  // Render deployment: Read from environment variable (JSON string)
-  // Handle escaped newlines in private key (Render UI may escape \n as \\n)
-  let serviceAccountKeyStr = process.env.GOOGLE_SERVICE_ACCOUNT_KEY;
-  // Convert \\n to \n if needed (Render may escape newlines)
-  if (serviceAccountKeyStr.includes('\\n')) {
-    serviceAccountKeyStr = serviceAccountKeyStr.replace(/\\n/g, '\n');
-  }
-  const serviceAccountKey = JSON.parse(serviceAccountKeyStr);
-  auth = new google.auth.GoogleAuth({
-    credentials: serviceAccountKey,
-    scopes: ['https://www.googleapis.com/auth/spreadsheets'],
-  });
-} else if (process.env.GOOGLE_SERVICE_ACCOUNT_KEY_FILE) {
-  // Local development: Read from file
-  // Resolve path: if it starts with ./server/, resolve relative to server root
-  // __dirname is On Production/server/src/repos/, so go up 2 levels to server root
-  let keyFilePath = process.env.GOOGLE_SERVICE_ACCOUNT_KEY_FILE;
+const keyFile = process.env.GOOGLE_SERVICE_ACCOUNT_KEY_FILE;
+const keyJson = process.env.GOOGLE_SERVICE_ACCOUNT_KEY;
+
+let rawJson;
+let authMethod;
+
+if (keyFile) {
+  // Render Secret File or local file: Read file and parse JSON
+  authMethod = 'file';
   let keyFileAbsolute;
   
-  if (keyFilePath.startsWith('./server/')) {
+  if (keyFile.startsWith('./server/')) {
     // Remove ./server/ prefix and resolve from server root
-    const relativePath = keyFilePath.replace('./server/', '');
+    const relativePath = keyFile.replace('./server/', '');
     const serverRoot = path.resolve(__dirname, '../..'); // Go up from src/repos/ to server/
     keyFileAbsolute = path.resolve(serverRoot, relativePath);
-  } else if (keyFilePath.startsWith('./')) {
+  } else if (keyFile.startsWith('./')) {
     // Relative path, resolve from server root
     const serverRoot = path.resolve(__dirname, '../..'); // Go up from src/repos/ to server/
-    keyFileAbsolute = path.resolve(serverRoot, keyFilePath.replace('./', ''));
+    keyFileAbsolute = path.resolve(serverRoot, keyFile.replace('./', ''));
   } else {
-    // Absolute path or path relative to current working directory
-    keyFileAbsolute = path.isAbsolute(keyFilePath) 
-      ? keyFilePath 
-      : path.resolve(process.cwd(), keyFilePath);
+    // Absolute path (e.g., /etc/secrets/service-account.json on Render) or path relative to current working directory
+    keyFileAbsolute = path.isAbsolute(keyFile) 
+      ? keyFile 
+      : path.resolve(process.cwd(), keyFile);
   }
   
-  auth = new google.auth.GoogleAuth({
-    keyFile: keyFileAbsolute,
-    scopes: ['https://www.googleapis.com/auth/spreadsheets'],
-  });
+  try {
+    rawJson = fs.readFileSync(keyFileAbsolute, 'utf8');
+    console.log(`✅ [GOOGLE_AUTH] Using service account key from file: ${keyFileAbsolute}`);
+  } catch (error) {
+    throw new Error(`Failed to read service account key file at ${keyFileAbsolute}: ${error.message}`);
+  }
+} else if (keyJson) {
+  // Environment variable: Parse JSON string directly
+  authMethod = 'env';
+  rawJson = keyJson;
+  console.log(`✅ [GOOGLE_AUTH] Using service account key from environment variable`);
 } else {
-  throw new Error('Either GOOGLE_SERVICE_ACCOUNT_KEY or GOOGLE_SERVICE_ACCOUNT_KEY_FILE must be set');
+  throw new Error('Either GOOGLE_SERVICE_ACCOUNT_KEY_FILE or GOOGLE_SERVICE_ACCOUNT_KEY must be set');
 }
+
+// Parse JSON and normalize private_key newlines
+let serviceAccountKey;
+try {
+  serviceAccountKey = JSON.parse(rawJson);
+} catch (error) {
+  throw new Error(`Failed to parse service account key JSON (method: ${authMethod}): ${error.message}`);
+}
+
+// Normalize private_key: convert \\n to \n (handles Render's escaped newlines)
+if (serviceAccountKey.private_key) {
+  serviceAccountKey.private_key = serviceAccountKey.private_key.replace(/\\n/g, '\n');
+}
+
+// Create Google Auth instance
+auth = new google.auth.GoogleAuth({
+  credentials: serviceAccountKey,
+  scopes: ['https://www.googleapis.com/auth/spreadsheets'],
+});
 
 const sheets = google.sheets({ version: 'v4', auth });
 
