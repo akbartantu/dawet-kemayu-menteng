@@ -208,18 +208,38 @@ See **SECTION B** below for detailed instructions on setting environment variabl
 2. Look for:
    - ✅ `Server running on port XXXX`
    - ✅ `Google Sheets initialized`
+   - ✅ `✅ [INIT] ensureMessagesHeaders type: function`
+   - ✅ `✅ [INIT] Messages headers initialized`
    - ✅ `Production mode: Using webhook`
+   - ✅ `ℹ️ [WEBHOOK] Setting webhook URL: https://your-app.onrender.com/api/webhooks/telegram`
+   - ✅ `✅ [WEBHOOK] Webhook registered successfully: ...`
 3. If you see errors, check:
    - Missing environment variables (see Section B)
    - Import/module errors (check logs)
    - Google Sheets authentication issues
+   - `ensureMessagesHeaders is not a function` → Check that conversations.repo.js exports are correct
 
-#### Step 9: Quick Smoke Test
+#### Step 9: Test Webhook Endpoint
+
+1. **Test GET endpoint (health check):**
+   - Open browser: `https://your-app.onrender.com/api/webhooks/telegram`
+   - Should return: `{"ok":true,"message":"telegram webhook endpoint live","timestamp":"..."}`
+   - If you see `{"error":"API endpoint not found"}`, the route is not working
+
+2. **Verify webhook is registered:**
+   - Check Render logs for: `✅ [WEBHOOK] Webhook registered successfully`
+   - The URL should be: `https://your-app.onrender.com/api/webhooks/telegram` (no duplication)
+
+#### Step 10: Quick Smoke Test
 
 1. Open your Telegram bot
 2. Send `/start` - bot should respond
-3. Send a test order message
-4. Check Render logs to see if message was received
+3. Check Render logs for:
+   - `✅ [WEBHOOK] Webhook route hit`
+   - `✅ [WEBHOOK] Telegram update received`
+   - `💬 [WEBHOOK] New Telegram message received: ...`
+4. Send a test order message
+5. Verify bot responds and logs show webhook activity
 
 ---
 
@@ -313,7 +333,12 @@ The `GOOGLE_SERVICE_ACCOUNT_KEY` contains a private key with newlines. Render's 
 2. Look for startup messages confirming:
    - ✅ Environment variables validated
    - ✅ Google Sheets connected
-   - ✅ Telegram webhook registered
+   - ✅ `✅ [INIT] ensureMessagesHeaders type: function`
+   - ✅ `✅ [INIT] Messages headers initialized`
+   - ✅ Telegram webhook registered: `✅ [WEBHOOK] Webhook registered successfully: https://...`
+3. **Test webhook endpoint:**
+   - Visit: `https://your-app.onrender.com/api/webhooks/telegram`
+   - Should return: `{"ok":true,"message":"telegram webhook endpoint live"}`
 
 ---
 
@@ -340,6 +365,19 @@ The `GOOGLE_SERVICE_ACCOUNT_KEY` contains a private key with newlines. Render's 
 6. **❌ Wrong start command**
    - ✅ **Correct:** `cd server && npm start` or `cd server && node server.js`
    - ❌ **Wrong:** `npm start` (this won't work because package.json is in server/)
+
+7. **❌ Webhook endpoint returns "API endpoint not found"**
+   - ✅ **Fixed:** GET `/api/webhooks/telegram` route added for health checks
+   - ⚠️ **Check:** Verify Express app is running and routes are registered
+
+8. **❌ Webhook URL duplication (e.g., `/api/webhooks/telegram/api/webhooks/telegram`)**
+   - ✅ **Fixed:** Code now checks if URL already includes the path
+   - ⚠️ **Check:** Set `RENDER_EXTERNAL_URL` to base URL only (e.g., `https://your-app.onrender.com`)
+   - ⚠️ **Check:** Don't include `/api/webhooks/telegram` in `WEBHOOK_URL` env var
+
+9. **❌ `ensureMessagesHeaders is not a function` error**
+   - ✅ **Fixed:** Added export verification and type checking
+   - ⚠️ **Check:** Logs should show `✅ [INIT] ensureMessagesHeaders type: function`
 
 ---
 
