@@ -476,7 +476,7 @@ async function formatOrderListMessage(orders, date) {
     if (index < uniqueOrders.length - 1) {
       message += `─────────────────\n\n`;
     }
-  });
+  }
   
   return message;
 }
