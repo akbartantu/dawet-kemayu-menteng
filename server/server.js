@@ -227,7 +227,8 @@ function stripBotMentions(text, botUsername) {
  * Telegram sends messages to this endpoint when customers message the bot
  */
 app.post('/api/webhooks/telegram', async (req, res) => {
-  console.log('📨 Received Telegram webhook:', JSON.stringify(req.body, null, 2));
+  console.log('✅ [WEBHOOK] Webhook route hit');
+  console.log('✅ [WEBHOOK] Update received');
 
   // Always respond 200 OK to Telegram immediately
   res.status(200).send('OK');
@@ -239,16 +240,19 @@ app.post('/api/webhooks/telegram', async (req, res) => {
     // Telegram sends updates in this structure
     // Handle both private messages and group messages
     if (update.message) {
+      console.log(`💬 [WEBHOOK] New Telegram message received: chatId=${update.message.chat.id}, text="${update.message.text?.substring(0, 50) || 'N/A'}"`);
       // Process messages with group/supergroup gating
       await routeTelegramMessage(update.message);
     }
     
     // Handle callback queries (button clicks) - works in all chat types
     if (update.callback_query) {
+      console.log(`💬 [WEBHOOK] Callback query received: data="${update.callback_query.data}"`);
       await handleCallbackQuery(update.callback_query);
     }
   } catch (error) {
-    console.error('❌ Error processing Telegram webhook:', error);
+    console.error('❌ [WEBHOOK] Error processing Telegram webhook:', error);
+    console.error('❌ [WEBHOOK] Stack:', error.stack);
   }
 });
 
@@ -2553,20 +2557,68 @@ async function killProcessOnPort(port) {
   try {
     // Initialize Google Sheets
     await initializeStorage();
-
+    console.log('✅ [INIT] Google Sheets storage initialized successfully');
   } catch (error) {
-    console.error(`⚠️  Google Sheets initialization failed:`, error.message);
-
-    console.log(`   Continuing without storage (messages stored in memory only)`);
+    console.error(`❌ [INIT] Google Sheets initialization failed:`, error.message);
+    console.error(`❌ [INIT] Stack:`, error.stack);
+    
+    // Fail hard - bot should not run without storage
+    // Only allow memory storage if explicitly enabled via env var
+    const allowMemoryStorage = process.env.ALLOW_MEMORY_STORAGE === 'true';
+    if (allowMemoryStorage) {
+      console.warn(`⚠️  [INIT] ALLOW_MEMORY_STORAGE=true - Continuing without storage (messages stored in memory only)`);
+    } else {
+      console.error(`❌ [INIT] Google Sheets initialization is required. Set ALLOW_MEMORY_STORAGE=true to override.`);
+      throw error; // Stop startup
+    }
   }
   
   // Start polling only in development mode
   // In production, use webhook instead
   if (process.env.NODE_ENV === 'production') {
     console.log(`\n🌐 Production mode: Using webhook (polling disabled)`);
-
+    
+    // Set webhook URL for production
+    const botToken = process.env.TELEGRAM_BOT_TOKEN;
+    if (botToken) {
+      try {
+        // Get webhook URL from environment or construct from Render URL
+        const webhookUrl = process.env.WEBHOOK_URL || 
+                          process.env.RENDER_EXTERNAL_URL || 
+                          (process.env.RENDER_SERVICE_NAME ? `https://${process.env.RENDER_SERVICE_NAME}.onrender.com` : null);
+        
+        if (!webhookUrl) {
+          console.warn(`⚠️  [WEBHOOK] WEBHOOK_URL or RENDER_EXTERNAL_URL not set, cannot auto-register webhook`);
+          console.warn(`⚠️  [WEBHOOK] Please manually set webhook URL in Telegram Bot settings`);
+        } else {
+          const webhookPath = '/api/webhooks/telegram';
+          const fullWebhookUrl = `${webhookUrl}${webhookPath}`;
+          
+          const setWebhookUrl = `${TELEGRAM_API_BASE}${botToken}/setWebhook`;
+          const response = await fetch(setWebhookUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              url: fullWebhookUrl,
+              drop_pending_updates: true,
+            }),
+          });
+          
+          const data = await response.json();
+          if (data.ok) {
+            console.log(`✅ [WEBHOOK] Webhook registered: ${fullWebhookUrl}`);
+          } else {
+            console.error(`❌ [WEBHOOK] Failed to register webhook: ${data.description || 'Unknown error'}`);
+          }
+        }
+      } catch (error) {
+        console.error(`❌ [WEBHOOK] Error setting webhook:`, error.message);
+        console.error(`❌ [WEBHOOK] Stack:`, error.stack);
+      }
+    } else {
+      console.warn(`⚠️  [WEBHOOK] TELEGRAM_BOT_TOKEN not set, cannot register webhook`);
+    }
   } else {
-
     console.log(`   (This will automatically remove any existing webhook)`);
     startPolling();
   }

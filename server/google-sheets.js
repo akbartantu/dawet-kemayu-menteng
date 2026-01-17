@@ -132,6 +132,7 @@ export async function initializeStorage() {
 
     // Initialize Messages sheet headers (idempotent - safe to call multiple times)
     await ensureMessagesHeaders();
+    console.log('✅ [INIT] Messages headers initialized');
 
     // Create Conversations sheet if it doesn't exist
     const CONVERSATIONS_SHEET = SHEET_NAMES.CONVERSATIONS;
@@ -153,30 +154,33 @@ export async function initializeStorage() {
 
     // Initialize Conversations sheet headers (idempotent - safe to call multiple times)
     await ensureConversationsHeaders();
+    console.log('✅ [INIT] Conversations headers initialized');
 
     // Initialize price list
     try {
       await initializePriceList();
+      console.log('✅ [INIT] Price list initialized');
     } catch (error) {
       console.error('⚠️  Error initializing price list:', error.message);
-      // Don't throw - continue without price list
+      // Don't throw - continue without price list (optional)
     }
-
 
     // Initialize Users sheet
     try {
       await ensureUsersSheet();
+      console.log('✅ [INIT] Users sheet initialized');
     } catch (error) {
       console.error('⚠️  Error initializing Users sheet:', error.message);
-      // Don't throw - continue without Users sheet
+      // Don't throw - continue without Users sheet (optional)
     }
 
     // Initialize Payment_History sheet
     try {
       await ensurePaymentHistorySheet();
+      console.log('✅ [INIT] Payment_History sheet initialized');
     } catch (error) {
       console.error('⚠️  Error initializing Payment_History sheet:', error.message);
-      // Don't throw - continue without Payment_History sheet
+      // Don't throw - continue without Payment_History sheet (optional)
     }
 
   } catch (error) {

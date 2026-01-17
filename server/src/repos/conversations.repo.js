@@ -56,7 +56,7 @@ async function getSheetId(sheetName) {
  * Ensure Messages sheet has correct headers in row 1
  * This function is idempotent and safe to call multiple times
  */
-async function ensureMessagesHeaders() {
+export async function ensureMessagesHeaders() {
   try {
     const sheets = getSheetsClient();
     const SPREADSHEET_ID = getSpreadsheetId();
@@ -146,9 +146,11 @@ async function ensureMessagesHeaders() {
       },
     });
 
+    console.log('✅ [INIT] Messages headers initialized');
   } catch (error) {
     console.error('❌ Error ensuring Messages headers:', error.message);
-    // Don't throw - allow system to continue
+    console.error('❌ [INIT] Stack:', error.stack);
+    throw error; // Fail hard - bot should not run without storage
   }
 }
 
@@ -156,7 +158,7 @@ async function ensureMessagesHeaders() {
  * Ensure Conversations sheet has correct headers in row 1
  * This function is idempotent and safe to call multiple times
  */
-async function ensureConversationsHeaders() {
+export async function ensureConversationsHeaders() {
   try {
     const sheets = getSheetsClient();
     const SPREADSHEET_ID = getSpreadsheetId();
@@ -246,9 +248,11 @@ async function ensureConversationsHeaders() {
       },
     });
 
+    console.log('✅ [INIT] Conversations headers initialized');
   } catch (error) {
     console.error('❌ Error ensuring Conversations headers:', error.message);
-    // Don't throw - allow system to continue
+    console.error('❌ [INIT] Stack:', error.stack);
+    throw error; // Fail hard - bot should not run without storage
   }
 }
 
