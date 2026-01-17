@@ -681,7 +681,7 @@ async function formatUnpaidOrdersMessage(orders, date) {
     if (index < orders.length - 1) {
       message += `\n─────────────────\n\n`;
     }
-  });
+  }
   
   return message;
 }
