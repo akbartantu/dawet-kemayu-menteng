@@ -80,7 +80,19 @@ export {
 export async function initializeStorage() {
   const { ensureUsersSheet } = await import('./src/repos/users.repo.js');
   const { initializePriceList } = await import('./src/repos/price-list.repo.js');
-  const { ensureMessagesHeaders, ensureConversationsHeaders } = await import('./src/repos/conversations.repo.js');
+  const conversationsRepo = await import('./src/repos/conversations.repo.js');
+  const { ensureMessagesHeaders, ensureConversationsHeaders } = conversationsRepo;
+  
+  // Verify exports
+  if (typeof ensureMessagesHeaders !== 'function') {
+    throw new Error(`ensureMessagesHeaders is not a function. Type: ${typeof ensureMessagesHeaders}. Available exports: ${Object.keys(conversationsRepo).join(', ')}`);
+  }
+  if (typeof ensureConversationsHeaders !== 'function') {
+    throw new Error(`ensureConversationsHeaders is not a function. Type: ${typeof ensureConversationsHeaders}`);
+  }
+  
+  console.log('✅ [INIT] ensureMessagesHeaders type:', typeof ensureMessagesHeaders);
+  console.log('✅ [INIT] ensureConversationsHeaders type:', typeof ensureConversationsHeaders);
   const { ensurePaymentHistorySheet } = await import('./src/repos/payment-history.repo.js');
   const { getSheetsClient, getSpreadsheetId } = await import('./src/repos/sheets.client.js');
   

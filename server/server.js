@@ -226,9 +226,20 @@ function stripBotMentions(text, botUsername) {
  * Option A: Webhook (for production)
  * Telegram sends messages to this endpoint when customers message the bot
  */
+
+// GET route for health check / testing
+app.get('/api/webhooks/telegram', (req, res) => {
+  res.status(200).json({ 
+    ok: true, 
+    message: 'telegram webhook endpoint live',
+    timestamp: new Date().toISOString()
+  });
+});
+
+// POST route for Telegram webhook updates
 app.post('/api/webhooks/telegram', async (req, res) => {
   console.log('✅ [WEBHOOK] Webhook route hit');
-  console.log('✅ [WEBHOOK] Update received');
+  console.log('✅ [WEBHOOK] Telegram update received');
 
   // Always respond 200 OK to Telegram immediately
   res.status(200).send('OK');
@@ -2583,16 +2594,32 @@ async function killProcessOnPort(port) {
     if (botToken) {
       try {
         // Get webhook URL from environment or construct from Render URL
-        const webhookUrl = process.env.WEBHOOK_URL || 
-                          process.env.RENDER_EXTERNAL_URL || 
-                          (process.env.RENDER_SERVICE_NAME ? `https://${process.env.RENDER_SERVICE_NAME}.onrender.com` : null);
+        // WEBHOOK_URL may already include the full path, so check first
+        let baseUrl = process.env.WEBHOOK_URL || 
+                      process.env.RENDER_EXTERNAL_URL || 
+                      (process.env.RENDER_SERVICE_NAME ? `https://${process.env.RENDER_SERVICE_NAME}.onrender.com` : null);
         
-        if (!webhookUrl) {
+        if (!baseUrl) {
           console.warn(`⚠️  [WEBHOOK] WEBHOOK_URL or RENDER_EXTERNAL_URL not set, cannot auto-register webhook`);
           console.warn(`⚠️  [WEBHOOK] Please manually set webhook URL in Telegram Bot settings`);
         } else {
+          // Remove trailing slash if present
+          baseUrl = baseUrl.replace(/\/$/, '');
+          
+          // Check if baseUrl already includes the webhook path
           const webhookPath = '/api/webhooks/telegram';
-          const fullWebhookUrl = `${webhookUrl}${webhookPath}`;
+          let fullWebhookUrl;
+          
+          if (baseUrl.endsWith(webhookPath)) {
+            // Already includes the path, use as-is
+            fullWebhookUrl = baseUrl;
+            console.log(`ℹ️  [WEBHOOK] WEBHOOK_URL already includes path, using as-is: ${fullWebhookUrl}`);
+          } else {
+            // Append the path
+            fullWebhookUrl = `${baseUrl}${webhookPath}`;
+          }
+          
+          console.log(`ℹ️  [WEBHOOK] Setting webhook URL: ${fullWebhookUrl}`);
           
           const setWebhookUrl = `${TELEGRAM_API_BASE}${botToken}/setWebhook`;
           const response = await fetch(setWebhookUrl, {
@@ -2606,9 +2633,10 @@ async function killProcessOnPort(port) {
           
           const data = await response.json();
           if (data.ok) {
-            console.log(`✅ [WEBHOOK] Webhook registered: ${fullWebhookUrl}`);
+            console.log(`✅ [WEBHOOK] Webhook registered successfully: ${fullWebhookUrl}`);
           } else {
             console.error(`❌ [WEBHOOK] Failed to register webhook: ${data.description || 'Unknown error'}`);
+            console.error(`❌ [WEBHOOK] Response:`, JSON.stringify(data, null, 2));
           }
         }
       } catch (error) {
