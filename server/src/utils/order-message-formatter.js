@@ -97,85 +97,168 @@ export function formatOrderItemsWithPrices(itemDetails, packagingFee, packagingB
 
 /**
  * Format payment summary with subtotal suppression logic
+ * Uses canonical values from Orders sheet: product_total, packaging_fee, delivery_fee, total_amount
  * @param {Object} order - Order object
- * @param {Object} calculation - Calculation result from calculateOrderTotal
- * @param {number} packagingFee - Packaging fee
- * @param {number} deliveryFee - Delivery fee
+ * @param {Object} calculation - Calculation result from calculateOrderTotal (optional, for fallback)
+ * @param {number} packagingFee - Packaging fee (optional, fallback to order.packaging_fee)
+ * @param {number} deliveryFee - Delivery fee (optional, fallback to order.delivery_fee)
  * @returns {string} Formatted payment summary
  */
 export function formatPaymentSummary(order, calculation, packagingFee, deliveryFee) {
-  // Calculate subtotal (items + packaging)
-  const subtotal = calculation.subtotal + packagingFee;
+  // Use canonical values from order (source of truth)
+  const productTotal = parseFloat(order.product_total || 0);
+  const packagingFeeFromOrder = parseFloat(order.packaging_fee || 0);
+  const deliveryFeeFromOrder = parseFloat(order.delivery_fee || 0);
+  const totalAmount = parseFloat(order.total_amount || order.final_total || 0);
   
-  // Get total from order (canonical: total_amount, fallback: final_total)
-  const total = parseFloat(order.total_amount || order.final_total || 0);
+  // Use provided fees if available, otherwise use from order
+  const finalPackagingFee = packagingFee !== undefined ? packagingFee : packagingFeeFromOrder;
+  const finalDeliveryFee = deliveryFee !== undefined ? deliveryFee : deliveryFeeFromOrder;
   
-  // If no total from order, calculate it
-  const grandTotal = total > 0 ? total : (subtotal + deliveryFee);
+  // Subtotal = product_total (items only, no packaging, no delivery)
+  const subtotal = productTotal;
+  
+  // Calculate expected total
+  const expectedTotal = subtotal + finalPackagingFee + finalDeliveryFee;
   
   // Determine if we need to show breakdown
-  const hasNonZeroComponents = deliveryFee > 0 || packagingFee > 0;
-  const subtotalEqualsTotal = Math.abs(subtotal - grandTotal) < 0.01; // Account for floating point
+  const hasNonZeroComponents = finalDeliveryFee > 0 || finalPackagingFee > 0;
+  const subtotalEqualsTotal = Math.abs(subtotal - totalAmount) < 0.01 && !hasNonZeroComponents;
   
   // If subtotal == total AND no non-zero components -> show only Total
-  if (subtotalEqualsTotal && !hasNonZeroComponents) {
-    return `\n💰 Total Pembayaran: ${formatCurrencyIDR(grandTotal)}\n`;
+  if (subtotalEqualsTotal && totalAmount > 0) {
+    return `\n💰 Total Pembayaran: ${formatCurrencyIDR(totalAmount)}\n`;
   }
   
   // Otherwise show breakdown
   let paymentText = `\n💰 Rincian Pembayaran:\n`;
   paymentText += `Subtotal: ${formatCurrencyIDR(subtotal)}\n`;
   
-  if (deliveryFee > 0) {
-    paymentText += `Ongkir: ${formatCurrencyIDR(deliveryFee)}\n`;
+  if (finalDeliveryFee > 0) {
+    paymentText += `Ongkir: ${formatCurrencyIDR(finalDeliveryFee)}\n`;
   }
   
-  if (packagingFee > 0) {
-    paymentText += `Biaya Kemasan: ${formatCurrencyIDR(packagingFee)}\n`;
+  if (finalPackagingFee > 0) {
+    paymentText += `Biaya Kemasan: ${formatCurrencyIDR(finalPackagingFee)}\n`;
+  }
+  
+  // Check for adjustment (mismatch between expected and actual total)
+  const adjustment = totalAmount - expectedTotal;
+  if (Math.abs(adjustment) > 0.01) {
+    paymentText += `Penyesuaian: ${formatCurrencyIDR(adjustment)}\n`;
   }
   
   // Add separator before total
   paymentText += `--------------------\n`;
-  paymentText += `Total Pembayaran: ${formatCurrencyIDR(grandTotal)}\n`;
+  paymentText += `Total Pembayaran: ${formatCurrencyIDR(totalAmount)}\n`;
   
   return paymentText;
 }
 
 /**
- * Format notes section
- * @param {Array} notes - Order notes array
- * @returns {string} Formatted notes section
+ * Sanitize customer notes - filter out JSON objects and payment evidence
+ * @param {string|Array} notesJson - Notes as JSON string or array
+ * @returns {Array<string>} Array of human-readable note strings
  */
-export function formatNotes(notes) {
-  if (!notes || notes.length === 0) {
-    return `\n📝 Catatan:\n-\n`;
+export function sanitizeCustomerNotes(notesJson) {
+  if (!notesJson) {
+    return [];
   }
   
-  // Filter and format notes
+  // Parse if string
+  let notes = notesJson;
+  if (typeof notesJson === 'string') {
+    try {
+      notes = JSON.parse(notesJson);
+    } catch (e) {
+      // If not valid JSON, treat as plain string
+      if (notesJson.trim()) {
+        notes = [notesJson.trim()];
+      } else {
+        notes = [];
+      }
+    }
+  }
+  
+  // Ensure array
+  if (!Array.isArray(notes)) {
+    notes = notes ? [notes] : [];
+  }
+  
+  // Filter and sanitize
   const validNotes = notes
     .map(note => {
       if (note === null || note === undefined) return null;
+      
+      // Filter out payment evidence objects
       if (typeof note === 'object') {
-        if (note.text) return String(note.text);
-        if (note.note) return String(note.note);
-        if (note.value) return String(note.value);
-        if (note.message) return String(note.message);
-        if (Array.isArray(note)) return note.map(n => String(n)).join(', ');
+        const noteType = (note.type || '').toLowerCase();
+        if (noteType === 'payment_evidence' || noteType === 'paymentevidence') {
+          return null; // Skip payment evidence
+        }
+        
+        // Try to extract human-readable text from object
+        if (note.text) return String(note.text).trim();
+        if (note.note) return String(note.note).trim();
+        if (note.value) return String(note.value).trim();
+        if (note.message) return String(note.message).trim();
+        
+        // If it's an array, join it
+        if (Array.isArray(note)) {
+          return note.map(n => String(n)).join(', ').trim();
+        }
+        
+        // Skip raw JSON objects (don't stringify them for customers)
+        return null;
+      }
+      
+      // Convert to string
+      const noteStr = String(note).trim();
+      
+      // Filter out raw JSON strings (containing { or [ at start)
+      if (noteStr.startsWith('{') || noteStr.startsWith('[')) {
         try {
-          return JSON.stringify(note);
+          const parsed = JSON.parse(noteStr);
+          // If it's an object/array, skip it
+          if (typeof parsed === 'object') {
+            return null;
+          }
         } catch (e) {
-          return String(note);
+          // Not valid JSON, keep as string
         }
       }
-      return String(note);
+      
+      return noteStr;
     })
     .filter(note => {
       if (!note || !note.trim()) return false;
+      
       const noteLower = note.toLowerCase();
-      // Filter out packaging-related notes
-      return !(noteLower.includes('packaging') && 
-              (noteLower.includes('styrofoam') || noteLower.includes('ya') || noteLower.includes('yes')));
+      
+      // Filter out packaging-related notes (already shown in breakdown)
+      if (noteLower.includes('packaging') && 
+          (noteLower.includes('styrofoam') || noteLower.includes('ya') || noteLower.includes('yes'))) {
+        return false;
+      }
+      
+      // Filter out JSON-looking strings
+      if (noteLower.startsWith('{') || noteLower.startsWith('[')) {
+        return false;
+      }
+      
+      return true;
     });
+  
+  return validNotes;
+}
+
+/**
+ * Format notes section
+ * @param {string|Array} notes - Order notes (JSON string or array)
+ * @returns {string} Formatted notes section
+ */
+export function formatNotes(notes) {
+  const validNotes = sanitizeCustomerNotes(notes);
   
   if (validNotes.length === 0) {
     return `\n📝 Catatan:\n-\n`;

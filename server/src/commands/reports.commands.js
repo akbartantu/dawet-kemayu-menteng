@@ -135,46 +135,18 @@ function formatItemsForRecap(itemsJson) {
 
 /**
  * Format notes list for recap (bullet list format)
+ * Uses sanitizeCustomerNotes to filter out JSON objects and payment evidence
  */
-function formatNotesForRecap(notesJson) {
+async function formatNotesForRecap(notesJson) {
   try {
-    // Handle empty/null/undefined
-    if (!notesJson || notesJson === '' || notesJson === '[]' || notesJson === 'null') {
+    const { sanitizeCustomerNotes } = await import('../utils/order-message-formatter.js');
+    const validNotes = sanitizeCustomerNotes(notesJson);
+    
+    if (validNotes.length === 0) {
       return '- (tidak ada)';
     }
     
-    // Parse if string
-    let notes = notesJson;
-    if (typeof notesJson === 'string') {
-      // Try parsing as JSON
-      try {
-        notes = JSON.parse(notesJson);
-      } catch (e) {
-        // If not valid JSON, treat as plain string
-        if (notesJson.trim()) {
-          return `- ${notesJson}`;
-        }
-        return '- (tidak ada)';
-      }
-    }
-    
-    // Handle array
-    if (Array.isArray(notes)) {
-      if (notes.length === 0) {
-        return '- (tidak ada)';
-      }
-      return notes.map(note => {
-        const noteStr = typeof note === 'string' ? note : String(note || '');
-        return noteStr.trim() ? `- ${noteStr.trim()}` : '- (tidak ada)';
-      }).join('\n');
-    }
-    
-    // Handle single string
-    if (typeof notes === 'string' && notes.trim()) {
-      return `- ${notes.trim()}`;
-    }
-    
-    return '- (tidak ada)';
+    return validNotes.map(note => `- ${note.trim()}`).join('\n');
   } catch (error) {
     // Fallback: try to display raw value
     console.warn('⚠️ [FORMAT_NOTES] Error parsing notes_json:', error.message);
@@ -188,7 +160,7 @@ function formatNotesForRecap(notesJson) {
 /**
  * Format order recap message (H-1 recap format)
  */
-function formatRecapMessage(orders, date) {
+async function formatRecapMessage(orders, date) {
   if (orders.length === 0) {
     return `Tidak ada pesanan untuk besok (${date}).`;
   }
@@ -291,31 +263,12 @@ function formatRecapMessage(orders, date) {
     // Format notes (single line format, not bullet list)
     let notesStr = '';
     try {
-      let notes = notesData;
-      if (typeof notesData === 'string') {
-        try {
-          notes = JSON.parse(notesData);
-        } catch (e) {
-          // If not valid JSON, treat as plain string
-          if (notesData.trim()) {
-            notes = [notesData.trim()];
-          } else {
-            notes = [];
-          }
-        }
-      }
+      const { sanitizeCustomerNotes } = await import('../utils/order-message-formatter.js');
+      const validNotes = sanitizeCustomerNotes(notesData);
       
-      if (Array.isArray(notes) && notes.length > 0) {
-        // Filter out empty notes
-        const validNotes = notes.filter(note => note && String(note).trim());
-        if (validNotes.length > 0) {
-          // Join all notes with newline (single line per note)
-          notesStr = validNotes.map(note => String(note).trim()).join('\n');
-        } else {
-          notesStr = '-';
-        }
-      } else if (typeof notes === 'string' && notes.trim()) {
-        notesStr = notes.trim();
+      if (validNotes.length > 0) {
+        // Join all notes with newline (single line per note)
+        notesStr = validNotes.join('\n');
       } else {
         notesStr = '-';
       }
@@ -353,7 +306,7 @@ function formatRecapMessage(orders, date) {
 /**
  * Format order list message (uses same detailed format as recap)
  */
-function formatOrderListMessage(orders, date) {
+async function formatOrderListMessage(orders, date) {
   if (orders.length === 0) {
     // Ensure consistent empty response format
     return `📅 Tidak ada pesanan untuk tanggal ${date}.`;
@@ -479,55 +432,12 @@ function formatOrderListMessage(orders, date) {
     // Format notes (single line format, not bullet list)
     let notesStr = '';
     try {
-      let notes = notesData;
-      if (typeof notesData === 'string') {
-        try {
-          notes = JSON.parse(notesData);
-        } catch (e) {
-          // If not valid JSON, treat as plain string
-          if (notesData.trim()) {
-            notes = [notesData.trim()];
-          } else {
-            notes = [];
-          }
-        }
-      }
+      const { sanitizeCustomerNotes } = await import('../utils/order-message-formatter.js');
+      const validNotes = sanitizeCustomerNotes(notesData);
       
-      if (Array.isArray(notes) && notes.length > 0) {
-        // Filter out empty notes and packaging-related notes
-        const validNotes = notes.filter(note => {
-          const noteStr = String(note || '').trim();
-          if (!noteStr) return false;
-          // Filter out packaging-related notes
-          const noteLower = noteStr.toLowerCase();
-          if (noteLower.includes('packaging styrofoam') || 
-              noteLower.includes('packaging:') ||
-              noteLower === 'packaging styrofoam' ||
-              noteLower === 'ya' ||
-              noteLower === 'tidak') {
-            return false;
-          }
-          return true;
-        });
-        if (validNotes.length > 0) {
-          // Join all notes with newline (single line per note)
-          notesStr = validNotes.map(note => String(note).trim()).join('\n');
-        } else {
-          notesStr = '-';
-        }
-      } else if (typeof notes === 'string' && notes.trim()) {
-        const noteStr = notes.trim();
-        // Filter out packaging-related notes
-        const noteLower = noteStr.toLowerCase();
-        if (noteLower.includes('packaging styrofoam') || 
-            noteLower.includes('packaging:') ||
-            noteLower === 'packaging styrofoam' ||
-            noteLower === 'ya' ||
-            noteLower === 'tidak') {
-          notesStr = '-';
-        } else {
-          notesStr = noteStr;
-        }
+      if (validNotes.length > 0) {
+        // Join all notes with newline (single line per note)
+        notesStr = validNotes.join('\n');
       } else {
         notesStr = '-';
       }
@@ -604,7 +514,7 @@ export async function handleRecapH1(chatId, userId, sendMessage) {
     }
     
     // Format and send recap message
-    const message = formatRecapMessage(orders, tomorrow);
+    const message = await formatRecapMessage(orders, tomorrow);
     await sendMessage(chatId, message);
 
   } catch (error) {
@@ -661,7 +571,7 @@ export async function handleOrdersDate(chatId, userId, dateStr, sendMessage) {
     }
     
     // Format and send list message
-    const message = formatOrderListMessage(orders, targetDate);
+    const message = await formatOrderListMessage(orders, targetDate);
     await sendMessage(chatId, message);
 
   } catch (error) {
@@ -729,31 +639,11 @@ function formatUnpaidOrdersMessage(orders, date) {
     // Format notes
     let notesStr = '';
     try {
-      let notes = notesData;
-      if (typeof notesData === 'string') {
-        try {
-          notes = JSON.parse(notesData);
-        } catch (e) {
-          if (notesData.trim()) {
-            notes = [notesData.trim()];
-          } else {
-            notes = [];
-          }
-        }
-      }
+      const { sanitizeCustomerNotes } = await import('../utils/order-message-formatter.js');
+      const validNotes = sanitizeCustomerNotes(notesData);
       
-      if (Array.isArray(notes) && notes.length > 0) {
-        const validNotes = notes.filter(note => note && String(note).trim());
-        if (validNotes.length > 0) {
-          notesStr = validNotes.map(note => {
-            const noteStr = String(note).trim();
-            return noteStr ? `• ${noteStr}` : '';
-          }).filter(n => n).join('\n');
-        } else {
-          notesStr = '-';
-        }
-      } else if (typeof notes === 'string' && notes.trim()) {
-        notesStr = `• ${notes.trim()}`;
+      if (validNotes.length > 0) {
+        notesStr = validNotes.map(note => `• ${note.trim()}`).join('\n');
       } else {
         notesStr = '-';
       }
