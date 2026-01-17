@@ -165,10 +165,14 @@ async function formatRecapMessage(orders, date) {
     return `Tidak ada pesanan untuk besok (${date}).`;
   }
   
+  // Import sanitizer once at the top
+  const { sanitizeCustomerNotes } = await import('../utils/order-message-formatter.js');
+  
   let message = `📋REKAP PESANAN (${date})\n`;
   message += `Total: ${orders.length} pesanan\n\n`;
   
-  orders.forEach((order, index) => {
+  for (let index = 0; index < orders.length; index++) {
+    const order = orders[index];
     // Get delivery time (default to --:-- if missing/invalid)
     let deliveryTime = (order.delivery_time || '').trim();
     if (!deliveryTime || !/^\d{2}:\d{2}$/.test(deliveryTime)) {
@@ -263,7 +267,6 @@ async function formatRecapMessage(orders, date) {
     // Format notes (single line format, not bullet list)
     let notesStr = '';
     try {
-      const { sanitizeCustomerNotes } = await import('../utils/order-message-formatter.js');
       const validNotes = sanitizeCustomerNotes(notesData);
       
       if (validNotes.length > 0) {
@@ -298,7 +301,7 @@ async function formatRecapMessage(orders, date) {
     if (index < orders.length - 1) {
       message += `─────────────────\n\n`;
     }
-  });
+  }
   
   return message;
 }
@@ -311,6 +314,9 @@ async function formatOrderListMessage(orders, date) {
     // Ensure consistent empty response format
     return `📅 Tidak ada pesanan untuk tanggal ${date}.`;
   }
+  
+  // Import sanitizer once at the top
+  const { sanitizeCustomerNotes } = await import('../utils/order-message-formatter.js');
   
   // Remove duplicates by order_id (defensive)
   const uniqueOrders = [];
@@ -330,7 +336,8 @@ async function formatOrderListMessage(orders, date) {
   let message = `📋REKAP PESANAN (${date})\n`;
   message += `Total: ${uniqueOrders.length} pesanan\n\n`;
   
-  uniqueOrders.forEach((order, index) => {
+  for (let index = 0; index < uniqueOrders.length; index++) {
+    const order = uniqueOrders[index];
     // Get delivery time (default to --:-- if missing/invalid)
     let deliveryTime = (order.delivery_time || '').trim();
     if (!deliveryTime || !/^\d{2}:\d{2}$/.test(deliveryTime)) {
@@ -432,7 +439,6 @@ async function formatOrderListMessage(orders, date) {
     // Format notes (single line format, not bullet list)
     let notesStr = '';
     try {
-      const { sanitizeCustomerNotes } = await import('../utils/order-message-formatter.js');
       const validNotes = sanitizeCustomerNotes(notesData);
       
       if (validNotes.length > 0) {
@@ -584,15 +590,19 @@ export async function handleOrdersDate(chatId, userId, dateStr, sendMessage) {
 /**
  * Format unpaid orders message
  */
-function formatUnpaidOrdersMessage(orders, date) {
+async function formatUnpaidOrdersMessage(orders, date) {
   if (orders.length === 0) {
     return `💰 Tidak ada pesanan belum lunas untuk tanggal ${date}.`;
   }
   
+  // Import sanitizer once at the top
+  const { sanitizeCustomerNotes } = await import('../utils/order-message-formatter.js');
+  
   let message = `💰 PESANAN BELUM LUNAS (${date})\n`;
   message += `Total: ${orders.length} pesanan\n\n`;
   
-  orders.forEach((order, index) => {
+  for (let index = 0; index < orders.length; index++) {
+    const order = orders[index];
     // Get delivery time (default to --:-- if missing/invalid)
     let deliveryTime = (order.delivery_time || '').trim();
     if (!deliveryTime || !/^\d{2}:\d{2}$/.test(deliveryTime)) {
@@ -639,7 +649,6 @@ function formatUnpaidOrdersMessage(orders, date) {
     // Format notes
     let notesStr = '';
     try {
-      const { sanitizeCustomerNotes } = await import('../utils/order-message-formatter.js');
       const validNotes = sanitizeCustomerNotes(notesData);
       
       if (validNotes.length > 0) {
@@ -715,7 +724,7 @@ export async function handleOrdersUnpaid(chatId, userId, sendMessage) {
     console.log(`🔍 [ORDERS_UNPAID] Found ${unpaidOrders.length} unpaid order(s)`);
     
     // Format and send message
-    const message = formatUnpaidOrdersMessage(unpaidOrders, today);
+    const message = await formatUnpaidOrdersMessage(unpaidOrders, today);
     await sendMessage(chatId, message);
     
   } catch (error) {
