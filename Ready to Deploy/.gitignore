@@ -1,0 +1,52 @@
+# Dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# Testing
+coverage/
+
+# Production
+dist/
+build/
+
+# Environment variables
+.env
+.env.local
+.env.production
+.env.*.local
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+lerna-debug.log*
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# OS
+Thumbs.db
+
+# Service account key (IMPORTANT - NEVER COMMIT!)
+server/service-account-key.json
+**/service-account-key.json
+**/service-account.json
+*.pem
+*.key
+credentials*.json
+*service-account*
+
+# Data files (if any)
+server/data/*.json
+!server/data/.gitkeep
+
+# Documentation - exclude all markdown except README.md
+*.md
+!README.md
