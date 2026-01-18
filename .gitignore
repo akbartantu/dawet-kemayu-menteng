@@ -47,6 +47,18 @@ credentials*.json
 server/data/*.json
 !server/data/.gitkeep
 
+# Cursor AI directory (local development)
+.cursor/
+
+# Backup directories
+_BACKUP_LOCAL/
+_BACKUP_ROLLBACK/
+
+# Ready to Deploy internal documentation (not deployable)
+Ready to Deploy/docs/
+
 # Documentation - exclude all markdown except README.md
 *.md
 !README.md
+# But allow docs in specific folders (except Ready to Deploy/docs)
+!**/docs/*.md
