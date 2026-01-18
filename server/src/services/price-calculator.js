@@ -7,6 +7,8 @@ import { daysUntilDelivery, getDaysDiffJakarta } from '../utils/date-utils.js';
 import { calculateMinDP } from './payment-tracker.js';
 import { formatPrice, escapeMarkdown } from '../utils/formatting.js';
 import { THANK_YOU_TRUST, PAYMENT_DP_REQUIRED, PAYMENT_FULL_REQUIRED } from '../utils/messages.js';
+import { formatPaymentSummary } from '../utils/order-message-formatter.js';
+import { calculatePaymentTotals } from './payment.calculator.js';
 
 /**
  * Parse item name to extract base item and toppings
@@ -536,7 +538,6 @@ function formatFullPaymentRecap(order, priceList) {
   }
 
   order._delivery_fee_source = deliveryFeeSource;
-  const totalAmount = order.total_amount || order.final_total || subtotal + packagingPrice + shippingPrice;
   // Use delivery_method (stored in Orders.delivery_method) with fallback for backward compatibility
   const pengiriman = order.delivery_method || order.shipping_method || '-';
 
@@ -559,6 +560,10 @@ function formatFullPaymentRecap(order, priceList) {
   if (!itemList.trim()) {
     itemList = '-';
   }
+  
+  // Use shared payment calculator and formatter for consistent breakdown
+  // This ensures REKAP matches KONFIRMASI PESANAN format exactly
+  const paymentBreakdown = formatPaymentSummary(order, calculation, packagingPrice, shippingPrice, 'confirmation');
   
   // Build FULL PAYMENT invoice (no DP section)
   let invoice = `🧾 REKAP PESANAN & PEMBAYARAN\n`;
@@ -584,18 +589,11 @@ function formatFullPaymentRecap(order, priceList) {
   
   // Display delivery_method (never "-" if provided)
   const displayPengiriman = pengiriman && pengiriman !== '-' ? pengiriman : '-';
-  invoice += `\nPengiriman: ${displayPengiriman}\n`;
+  invoice += `\nPengiriman: ${displayPengiriman}\n\n`;
   
-  if (shippingPrice > 0) {
-    invoice += `Ongkir: Rp${formatPrice(shippingPrice)}\n\n`;
-  } else if (deliveryFeeSource === 'NOT_PROVIDED') {
-    invoice += `Ongkir: -\n\n`;
-  } else {
-    invoice += `Ongkir: -\n\n`;
-  }
-  invoice += `--------------------------------\n`;
-  invoice += `TOTAL PEMBAYARAN:\n`;
-  invoice += `Rp${formatPrice(totalAmount)}\n\n`;
+  // Use shared payment breakdown format (matches KONFIRMASI PESANAN)
+  invoice += paymentBreakdown;
+  // Add separator after Total Pembayaran, before bank section
   invoice += `--------------------------------\n`;
   invoice += `🏦 PEMBAYARAN TRANSFER BANK\n`;
   invoice += `Bank Jago\n`;
@@ -689,8 +687,6 @@ function formatDPRecap(order, priceList) {
   }
 
   order._delivery_fee_source = deliveryFeeSource;
-  const totalAmount = order.total_amount || order.final_total || subtotal + packagingPrice + shippingPrice;
-  const dpMinimum = calculateMinDP(totalAmount);
   // Use delivery_method (stored in Orders.delivery_method) with fallback for backward compatibility
   const pengiriman = order.delivery_method || order.shipping_method || '-';
 
@@ -713,6 +709,15 @@ function formatDPRecap(order, priceList) {
   if (!itemList.trim()) {
     itemList = '-';
   }
+  
+  // Use shared payment calculator and formatter for consistent breakdown
+  // This ensures REKAP matches KONFIRMASI PESANAN format exactly
+  const paymentBreakdown = formatPaymentSummary(order, calculation, packagingPrice, shippingPrice, 'confirmation');
+  
+  // Calculate total for DP calculation (use shared calculator to get total)
+  const totals = calculatePaymentTotals(order, calculation, packagingPrice, shippingPrice);
+  const totalAmount = totals.totalAmount;
+  const dpMinimum = calculateMinDP(totalAmount);
   
   // Build DP invoice (with DP section)
   let invoice = `🧾 REKAP PESANAN & PEMBAYARAN\n`;
@@ -738,20 +743,13 @@ function formatDPRecap(order, priceList) {
   
   // Display delivery_method (never "-" if provided)
   const displayPengiriman = pengiriman && pengiriman !== '-' ? pengiriman : '-';
-  invoice += `\nPengiriman: ${displayPengiriman}\n`;
+  invoice += `\nPengiriman: ${displayPengiriman}\n\n`;
   
-  if (shippingPrice > 0) {
-    invoice += `Ongkir: Rp${formatPrice(shippingPrice)}\n\n`;
-  } else if (deliveryFeeSource === 'NOT_PROVIDED') {
-    invoice += `Ongkir: -\n\n`;
-  } else {
-    invoice += `Ongkir: -\n\n`;
-  }
-  invoice += `--------------------------------\n`;
-  invoice += `TOTAL PEMBAYARAN:\n`;
-  invoice += `Rp${formatPrice(totalAmount)}\n\n`;
+  // Use shared payment breakdown format (matches KONFIRMASI PESANAN)
+  invoice += paymentBreakdown;
   invoice += `Minimal DP (50%):\n`;
   invoice += `Rp${formatPrice(dpMinimum)}\n\n`;
+  // Add separator after Total Pembayaran and DP info, before bank section
   invoice += `--------------------------------\n`;
   invoice += `🏦 PEMBAYARAN TRANSFER BANK\n`;
   invoice += `Bank Jago\n`;

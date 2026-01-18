@@ -5,6 +5,7 @@
  */
 
 import { formatPrice } from './formatting.js';
+import { calculatePaymentTotals } from '../services/payment.calculator.js';
 
 /**
  * Format currency as Indonesian Rupiah (Rp XXX.XXX)
@@ -96,61 +97,58 @@ export function formatOrderItemsWithPrices(itemDetails, packagingFee, packagingB
 }
 
 /**
- * Format payment summary with subtotal suppression logic
+ * Format payment summary
  * Uses canonical values from Orders sheet: product_total, packaging_fee, delivery_fee, total_amount
  * @param {Object} order - Order object
  * @param {Object} calculation - Calculation result from calculateOrderTotal (optional, for fallback)
  * @param {number} packagingFee - Packaging fee (optional, fallback to order.packaging_fee)
  * @param {number} deliveryFee - Delivery fee (optional, fallback to order.delivery_fee)
+ * @param {string} mode - Display mode: 'confirmation' (simple total only) or 'detail' (full breakdown)
  * @returns {string} Formatted payment summary
  */
-export function formatPaymentSummary(order, calculation, packagingFee, deliveryFee) {
-  // Use canonical values from order (source of truth)
-  const productTotal = parseFloat(order.product_total || 0);
-  const packagingFeeFromOrder = parseFloat(order.packaging_fee || 0);
-  const deliveryFeeFromOrder = parseFloat(order.delivery_fee || 0);
-  const totalAmount = parseFloat(order.total_amount || order.final_total || 0);
+export function formatPaymentSummary(order, calculation, packagingFee, deliveryFee, mode = 'detail') {
+  // Use shared calculator for consistent totals
+  const totals = calculatePaymentTotals(order, calculation, packagingFee, deliveryFee);
   
-  // Use provided fees if available, otherwise use from order
-  const finalPackagingFee = packagingFee !== undefined ? packagingFee : packagingFeeFromOrder;
-  const finalDeliveryFee = deliveryFee !== undefined ? deliveryFee : deliveryFeeFromOrder;
+  const { subtotal, deliveryFee: finalDeliveryFee, packagingFee: finalPackagingFee, totalAmount } = totals;
   
-  // Subtotal = product_total (items only, no packaging, no delivery)
-  const subtotal = productTotal;
-  
-  // Calculate expected total
+  // Calculate expected total from components (for validation)
   const expectedTotal = subtotal + finalPackagingFee + finalDeliveryFee;
   
-  // Determine if we need to show breakdown
-  const hasNonZeroComponents = finalDeliveryFee > 0 || finalPackagingFee > 0;
-  const subtotalEqualsTotal = Math.abs(subtotal - totalAmount) < 0.01 && !hasNonZeroComponents;
-  
-  // If subtotal == total AND no non-zero components -> show only Total
-  if (subtotalEqualsTotal && totalAmount > 0) {
-    return `\n💰 Total Pembayaran: ${formatCurrencyIDR(totalAmount)}\n`;
+  // Validate total matches components (defensive check)
+  const totalMismatch = Math.abs(totalAmount - expectedTotal) > 0.01;
+  if (totalMismatch) {
+    console.warn('⚠️ [PAYMENT_SUMMARY] Total mismatch detected:', {
+      orderId: order.id,
+      calculatedTotal: expectedTotal,
+      storedTotal: totalAmount,
+      difference: totalAmount - expectedTotal,
+    });
+    // Use calculated total for consistency (components are source of truth)
+    console.warn('⚠️ [PAYMENT_SUMMARY] Using calculated total for display:', expectedTotal);
   }
   
-  // Otherwise show breakdown
+  // Use calculated total if mismatch detected, otherwise use stored total
+  const displayTotal = totalMismatch ? expectedTotal : totalAmount;
+  
+  // Both confirmation and detail modes now show full breakdown
+  // Always show all three lines (even if 0) for clarity
   let paymentText = `\n💰 Rincian Pembayaran:\n`;
   paymentText += `Subtotal: ${formatCurrencyIDR(subtotal)}\n`;
+  paymentText += `Ongkir: ${formatCurrencyIDR(finalDeliveryFee)}\n`;
+  paymentText += `Biaya Kemasan: ${formatCurrencyIDR(finalPackagingFee)}\n`;
   
-  if (finalDeliveryFee > 0) {
-    paymentText += `Ongkir: ${formatCurrencyIDR(finalDeliveryFee)}\n`;
-  }
-  
-  if (finalPackagingFee > 0) {
-    paymentText += `Biaya Kemasan: ${formatCurrencyIDR(finalPackagingFee)}\n`;
-  }
-  
-  // Check for adjustment (mismatch between expected and actual total)
-  const adjustment = totalAmount - expectedTotal;
-  if (Math.abs(adjustment) > 0.01) {
-    paymentText += `Penyesuaian: ${formatCurrencyIDR(adjustment)}\n`;
+  // Check for adjustment (mismatch between calculated and stored total) - only for detail mode
+  if (mode === 'detail') {
+    const adjustment = totalAmount - expectedTotal;
+    if (Math.abs(adjustment) > 0.01) {
+      paymentText += `Penyesuaian: ${formatCurrencyIDR(adjustment)}\n`;
+    }
   }
   
   // Add separator before total
   paymentText += `--------------------\n`;
-  paymentText += `Total Pembayaran: ${formatCurrencyIDR(totalAmount)}\n`;
+  paymentText += `Total Pembayaran: ${formatCurrencyIDR(displayTotal)}\n`;
   
   return paymentText;
 }
@@ -260,8 +258,9 @@ export function sanitizeCustomerNotes(notesJson) {
 export function formatNotes(notes) {
   const validNotes = sanitizeCustomerNotes(notes);
   
+  // If no notes, return empty string (don't show notes block)
   if (validNotes.length === 0) {
-    return `\n📝 Catatan:\n-\n`;
+    return '';
   }
   
   let notesText = `\n📝 Catatan:\n`;
@@ -317,9 +316,9 @@ export async function buildOrderDetailMessage(order, calculation = null, mode = 
     
     message += formatOrderItemsWithPrices(calculation.itemDetails, packagingFee, packagingBoxes);
     
-    // Payment summary
+    // Payment summary (confirmation mode: simple total only)
     const deliveryFee = parseFloat(order.delivery_fee) || 0;
-    message += formatPaymentSummary(order, calculation, packagingFee, deliveryFee);
+    message += formatPaymentSummary(order, calculation, packagingFee, deliveryFee, 'confirmation');
   } else {
     // Simple items list (no prices)
     message += formatOrderItems(order.items || []);
